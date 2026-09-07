@@ -2,6 +2,7 @@ name: validate
 
 on:
   push:
+    branches: [master]
   pull_request:
   schedule:
     - cron: "0 7 * * 3"
@@ -10,9 +11,17 @@ on:
 env:
   DOMAIN: deebot_estate
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,6 +51,7 @@ jobs:
     # nothing would point that out -- a workflow file with four green jobs that
     # never looked at the manifest reads exactly like one that did.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: assert this repo is still resolver-only
