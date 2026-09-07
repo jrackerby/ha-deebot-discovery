@@ -1,0 +1,62 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 7 * * 3"
+  workflow_dispatch:
+
+env:
+  DOMAIN: deebot_estate
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # NO homeassistant and NO deebot-client, deliberately: const.py and
+      # probe.py import neither, which is the whole contract of keeping the
+      # capability resolver in a module that cannot reach either one
+      # (jrackerby/HA LAW 11, household_state's precedent). The suite drives
+      # the real functions -- no mocks -- and a red result is attributable to a
+      # decision in this repo rather than to a core release or a vendor library
+      # moving underneath it.
+      - name: run every suite
+        run: ./tools/run_tests.sh
+
+  scope:
+    # THIS REPO IS NOT YET AN INSTALLABLE INTEGRATION, and this job exists so
+    # that fact is asserted rather than assumed. It holds a capability resolver
+    # and its constants -- no manifest.json, no hacs.json, no platforms -- so
+    # hassfest, the real-core import job and HACS validation all have nothing
+    # to validate and are absent rather than present-and-vacuous. jrackerby/HA#608
+    # carries the work that makes them applicable.
+    #
+    # The moment a manifest.json lands, this job goes RED and says what to add.
+    # Without it, the integration would ship with no hassfest gate at all and
+    # nothing would point that out -- a workflow file with four green jobs that
+    # never looked at the manifest reads exactly like one that did.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: assert this repo is still resolver-only
+        run: |
+          set -euo pipefail
+          if [[ -f manifest.json ]]; then
+            echo "::error::manifest.json exists, so this is now a real integration --"
+            echo "::error::add the hassfest, imports and hacs jobs from jrackerby/navimow's"
+            echo "::error::validate.yml and delete this job. See jrackerby/HA#608."
+            exit 1
+          fi
+          echo "resolver-only: no manifest.json, so hassfest/imports/hacs correctly do not run"
+          # A sweep that does not assert its own completeness is not evidence
+          # (jrackerby/HA LAW 5). An empty checkout would satisfy the check above.
+          COUNT=$(ls ./*.py | wc -l)
+          echo "python modules at root: $COUNT"
+          test "$COUNT" -ge 2 \
+            || { echo "::error::only $COUNT module(s) at root -- the check above passed over an empty tree"; exit 1; }
