@@ -4,8 +4,9 @@ A Home Assistant integration for Ecovacs Deebot robots that **discovers** what
 a robot supports instead of looking it up in a table.
 
 **This repository is not yet an installable integration.** It holds the
-capability resolver and its constants — no `manifest.json`, no platforms, no
-config flow. `jrackerby/HA#608` carries the rest.
+capability resolver and its constants — no `manifest.json`, no `hacs.json`, no
+platforms, no config flow. HACS cannot install it, and it is published here for
+the resolver's sake rather than as something to add to Home Assistant.
 
 ## Why it exists
 
@@ -61,5 +62,6 @@ trusting any pass — a suite that cannot fail is not evidence.
 
 ## Layout
 
-Root layout (`content_in_root`), because `jrackerby/HA` submodules this
-repository as `custom_components/deebot_estate`.
+Root layout: the integration's modules sit at the repository root rather than
+under `custom_components/`, so the `hacs.json` this repo does not yet carry
+will declare `content_in_root: true` when it arrives.
