@@ -1,4 +1,4 @@
-# deebot-estate
+# Deebot Discovery
 
 A Home Assistant integration for Ecovacs Deebot robots that **discovers** what
 a robot supports instead of looking it up in a table.
@@ -11,8 +11,8 @@ the resolver's sake rather than as something to add to Home Assistant.
 ## Why it exists
 
 `deebot-client` resolves a robot's capabilities from a per-model lookup table
-keyed on an opaque class string. This estate's robot — a DEEBOT T90 PRO OMNI
-Care, class `nv8fz5` — is in none of that library's 248 hardware modules, even
+keyed on an opaque class string. The robot this was written for — a DEEBOT
+T90 PRO OMNI Care, class `nv8fz5` — is in none of that library's 248 hardware modules, even
 though four sibling T90 PRO OMNI classes are. Since v14 removed the fallback,
 `get_static_device_info` returns `None` for an unknown class and the robot gets
 **zero** entities.
