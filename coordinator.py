@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
-import ssl
 from typing import TYPE_CHECKING, Any
 
 from deebot_client.api_client import ApiClient
@@ -240,19 +239,33 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
         static = await load_seed()
         device = Device(DeviceInfo(api_info, static), authenticator)
 
-        # THE SSL CONTEXT IS BUILT IN THE EXECUTOR, and it has to be.
-        # `create_mqtt_config` builds one inline when it is not given one, and
-        # constructing a default context reads the system CA bundle off disk
-        # -- blocking file I/O. Home Assistant detects that inside the event
-        # loop and logs a warning naming this integration and this line, which
-        # is exactly how this was found: it is not cosmetic, it stalls the
-        # loop for every other integration while the certificates load.
-        ssl_context = await self.hass.async_add_executor_job(ssl.create_default_context)
+        # NO `ssl_context` ARGUMENT, DELIBERATELY, AND THIS COST AN OUTAGE.
+        #
+        # An earlier pass passed one, to keep the context build off the event
+        # loop: `create_mqtt_config` builds it inline otherwise, and reading
+        # the CA bundle is blocking I/O that Home Assistant detects and warns
+        # about by name. That change was right about the warning and wrong
+        # about everything else.
+        #
+        # The library's default branch does not just build a context. It also
+        # turns OFF hostname checking and certificate verification, because
+        # the Ecovacs broker answers 443 with a certificate that does not
+        # validate. Handing it a context takes the other branch and skips
+        # that, so a context that is merely correct fails verification and the
+        # client dies in a five-second reconnect loop -- measured live at 175
+        # failures before anyone noticed.
+        #
+        # WHY NOBODY NOTICED: probe passes go over REST, so capabilities kept
+        # answering `ok` and every entity kept a plausible value while push
+        # was dead. Stale is not the same as wrong, and a health read cannot
+        # tell them apart.
+        #
+        # So the argument is gone and the blocking-call warning is accepted.
+        # Reproducing the library's TLS settings here would fix both, but it
+        # means writing the disabling lines into this repo, and that belongs
+        # upstream -- deebot-client should build its own context off-loop.
         mqtt = MqttClient(
-            create_mqtt_config(
-                device_id=device_id, country=country, ssl_context=ssl_context
-            ),
-            authenticator,
+            create_mqtt_config(device_id=device_id, country=country), authenticator
         )
         try:
             await device.initialize(mqtt)

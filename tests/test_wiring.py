@@ -407,34 +407,52 @@ def check_the_password_is_hashed_before_it_is_sent(tree):
     return findings
 
 
-def check_the_mqtt_config_is_given_an_ssl_context(tree):
-    """`create_mqtt_config` must be handed a context, never left to build one.
+def check_the_mqtt_config_keeps_the_library_tls_settings(tree):
+    """`create_mqtt_config` is handed no context, or a fully prepared one.
 
-    ANOTHER DEFECT THAT SHIPPED AND THAT NO SUITE HERE COULD HAVE SEEN.
-    Given no `ssl_context`, deebot-client builds a default one inline, and
-    constructing a default SSL context reads the system CA bundle off disk.
-    Inside the event loop that is blocking I/O: Home Assistant detects it,
-    logs a warning naming this integration and the exact line, and every
-    other integration waits while the certificates load.
+    THE INVERSE OF WHAT THIS CHECK USED TO ASSERT, AND THE REVERSAL COST AN
+    OUTAGE. It was added to require an `ssl_context` argument, so the context
+    build would happen off the event loop. That is a real concern and it was
+    the wrong lever.
 
-    The context itself has to come from an executor; that this check cannot
-    verify. What it can verify is that the argument is passed at all, which
-    is the half that was missing.
+    The library's default branch does not merely build a context: it then
+    turns off hostname checking and certificate verification, because the
+    broker's certificate does not validate. Passing a context takes the other
+    branch and skips that, so a context that is merely correct cannot connect
+    and the client reconnect-loops -- while REST-based probes keep answering,
+    so every entity holds a plausible stale value and nothing looks wrong.
+
+    So: no argument is fine. An argument is fine ONLY if the module also
+    prepares the context the way the library would. Anything else is the
+    outage again.
     """
     findings = []
     for name, module in _modules(tree).items():
-        for node in ast.walk(module):
-            if not isinstance(node, ast.Call):
-                continue
-            if (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) != (
-                "create_mqtt_config"
-            ):
-                continue
-            if _keyword(node, "ssl_context") is None:
+        calls = [
+            node
+            for node in ast.walk(module)
+            if isinstance(node, ast.Call)
+            and (getattr(node.func, "id", None) or getattr(node.func, "attr", None))
+            == "create_mqtt_config"
+            and _keyword(node, "ssl_context") is not None
+        ]
+        if not calls:
+            continue
+        prepared = {
+            target.attr
+            for node in ast.walk(module)
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Attribute)
+        }
+        missing = {"check_hostname", "verify_mode"} - prepared
+        for call in calls:
+            if missing:
                 findings.append(
-                    f"{name}.py line {node.lineno}: create_mqtt_config with no "
-                    "ssl_context -- it will build one inline and block the event "
-                    "loop reading the CA bundle"
+                    f"{name}.py line {call.lineno}: create_mqtt_config is handed an "
+                    f"ssl_context but the module never sets {', '.join(sorted(missing))} "
+                    "-- the library's own default branch does, and skipping it is what "
+                    "reconnect-looped the broker"
                 )
     return findings
 
@@ -451,7 +469,7 @@ CHECKS = (
     ("the suite imports only the standard library", check_suite_imports_only_the_standard_library),
     ("the manifest agrees with the code", check_manifest_agrees_with_the_code),
     ("the password is hashed before it is sent", check_the_password_is_hashed_before_it_is_sent),
-    ("the mqtt config is given an ssl context", check_the_mqtt_config_is_given_an_ssl_context),
+    ("the mqtt config keeps the library's tls settings", check_the_mqtt_config_keeps_the_library_tls_settings),
 )
 
 TREE = read_tree()
@@ -585,12 +603,13 @@ FAIL_CASES = [
         {"findings": []},
     ),
     (
-        "self-test: an mqtt config with no ssl context must be found",
+        "self-test: a bare ssl_context on the mqtt config must be found",
         _broken_case(
-            check_the_mqtt_config_is_given_an_ssl_context,
+            check_the_mqtt_config_keeps_the_library_tls_settings,
             "coordinator.py",
-            "device_id=device_id, country=country, ssl_context=ssl_context",
-            "device_id=device_id, country=country",
+            "create_mqtt_config(device_id=device_id, country=country), authenticator",
+            "create_mqtt_config(device_id=device_id, country=country, "
+            "ssl_context=ssl_context), authenticator",
         ),
         {"findings": []},
     ),
