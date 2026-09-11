@@ -27,6 +27,12 @@ THE THREE RULES, and each exists because of a specific way this can lie:
      cannot assert its own completeness is not evidence.
   3. PROMOTE ON ONE OK, DEMOTE ONLY ON `miss_threshold` CONSECUTIVE MISSES
      ACROSS VOID-FREE PASSES. Fall dwell, never rise dwell.
+  4. AN OUTCOME NOBODY HAS CLASSIFIED IS NOT A MISS. Exactly one failure
+     code -- errno 500 -- carries the "or does not support the command"
+     reading; everything else the cloud can answer says nothing about the
+     capability, so INCONCLUSIVE leaves the belief and the streak untouched
+     rather than spending one of the three misses a demotion costs. `ok at
+     zero` and `could not read` are different values at the source.
 
 WHAT IT DELIBERATELY DOES NOT DO: it never invents a capability it has not
 seen answer. A seed hypothesis borrowed from a sibling model marks a key as
@@ -51,6 +57,12 @@ __all__ = ["CapabilityState", "PassResult", "resolve", "seed_order"]
 #: Outcomes that prove the command exists. UNPARSED counts: the robot
 #: answered, so the capability is there and only our reader is behind.
 _PROVES_PRESENT = frozenset({ProbeOutcome.OK, ProbeOutcome.UNPARSED})
+
+#: Outcomes that are not evidence either way. Rule 4. Kept as a set rather
+#: than an `is` test so that a future outcome added to const.py has one
+#: obvious place to be classified, and so that the two sets can be asserted
+#: disjoint by the suite.
+_NO_EVIDENCE = frozenset({ProbeOutcome.INCONCLUSIVE})
 
 
 @dataclass(frozen=True)
@@ -127,6 +139,12 @@ def resolve(
 
     changed: list[str] = []
     for key, outcome in outcomes.items():
+        # Rule 4, before anything reads or writes `states`: an unclassified
+        # answer must not create a CapabilityState for a key that has never
+        # been seen either, or "we have not looked" acquires a miss count.
+        if outcome in _NO_EVIDENCE:
+            continue
+
         before = states.get(key, CapabilityState())
 
         if outcome in _PROVES_PRESENT:

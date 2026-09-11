@@ -17,42 +17,20 @@ for real scenarios, and main() proves every one of them actually fails before
 trusting any PASS below. A suite that cannot fail is not evidence.
 """
 
-import importlib.util
 import os
 import sys
-import types
 
-# tests/ sits directly under the component root in both layouts: this repo
-# standing alone, and this repo installed as custom_components/deebot_estate.
-# One expression covers both.
-PKG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from _harness import load, run_suite  # noqa: E402
 
-def _load():
-    """Load const.py and probe.py by path, bypassing the package __init__ --
-    which will import homeassistant once this integration has one, and would
-    otherwise drag the whole HA runtime in to reach two import-free modules."""
-    pkg = types.ModuleType("deebot_estate")
-    pkg.__path__ = [PKG_DIR]
-    sys.modules["deebot_estate"] = pkg
-    out = {}
-    for name in ("const", "probe"):
-        spec = importlib.util.spec_from_file_location(
-            f"deebot_estate.{name}", os.path.join(PKG_DIR, f"{name}.py")
-        )
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[f"deebot_estate.{name}"] = mod
-        spec.loader.exec_module(mod)
-        out[name] = mod
-    return out["const"], out["probe"]
-
-
-const, probe = _load()
-OK, UNPARSED, NO_RESPONSE, OFFLINE = (
+const, probe = load("const", "probe")
+OK, UNPARSED, NO_RESPONSE, OFFLINE, INCONCLUSIVE = (
     const.ProbeOutcome.OK,
     const.ProbeOutcome.UNPARSED,
     const.ProbeOutcome.NO_RESPONSE,
     const.ProbeOutcome.OFFLINE,
+    const.ProbeOutcome.INCONCLUSIVE,
 )
 SUPPORTED, UNSUPPORTED, UNKNOWN = (
     const.Support.SUPPORTED,
@@ -149,6 +127,57 @@ def case_unknown_and_unsupported_do_not_collapse():
     return {"station": r.states["station"].support}
 
 
+def case_inconclusive_is_not_a_miss():
+    # Rule 4. Exactly one failure code carries the "or does not support the
+    # command" reading; anything else is an answer nobody has classified, and
+    # spending one of three misses on it is how a cloud-side error nobody
+    # understands deletes a working feature.
+    s = misses_after(2)
+    r = run(s, {"battery": OK, "station": INCONCLUSIVE})
+    return {"station": r.states["station"].support, "misses": r.states["station"].misses,
+            "changed": r.changed}
+
+
+def case_inconclusive_creates_no_state():
+    # The subtler half: an unclassified answer about a key never seen before
+    # must not bring that key into existence with a miss on it, or "we have
+    # not looked" silently acquires a streak.
+    r = run({"battery": State(SUPPORTED, 0)}, {"battery": OK, "station": INCONCLUSIVE})
+    return {"present": "station" in r.states, "void": r.void}
+
+
+def case_inconclusive_control_voids_the_pass():
+    prev = {"battery": State(SUPPORTED, 0), "station": State(SUPPORTED, 0)}
+    r = run(prev, {"battery": INCONCLUSIVE, "station": NO_RESPONSE})
+    return {"void": r.void, "station": r.states["station"].support,
+            "misses": r.states["station"].misses}
+
+
+def case_ten_inconclusive_passes_demote_nothing():
+    state = {"battery": State(SUPPORTED, 0), "station": State(SUPPORTED, 0)}
+    for _ in range(10):
+        state = run(state, {"battery": OK, "station": INCONCLUSIVE}).states
+    return {"station": state["station"].support, "misses": state["station"].misses}
+
+
+def case_every_outcome_is_classified():
+    # COMPLETENESS, not behaviour. Each ProbeOutcome must land in exactly one
+    # of the resolver's three readings: proves-present, no-evidence, or a
+    # miss (the implicit remainder). An outcome added to const.py without
+    # being classified would silently fall into the remainder and be counted
+    # as a miss -- the most expensive default available.
+    proves = probe._PROVES_PRESENT
+    no_evidence = probe._NO_EVIDENCE
+    both = proves & no_evidence
+    remainder = set(const.ProbeOutcome) - proves - no_evidence
+    return {
+        "overlap": sorted(o.value for o in both),
+        "proves": sorted(o.value for o in proves),
+        "no_evidence": sorted(o.value for o in no_evidence),
+        "counted_as_miss": sorted(o.value for o in remainder),
+    }
+
+
 def case_seed_orders_but_never_believes():
     known = {"station": State(UNKNOWN, 0), "map": State(UNKNOWN, 0), "battery": State(SUPPORTED, 0)}
     order = probe.seed_order(known, hypothesis={"map"}, candidates=["station", "map", "battery"])
@@ -185,6 +214,17 @@ CASES = [
      {"station": UNKNOWN}),
     ("a seed orders the probe and grants no belief", case_seed_orders_but_never_believes,
      {"first": "map", "last": "battery", "map_support": UNKNOWN}),
+    ("an inconclusive answer is not a miss", case_inconclusive_is_not_a_miss,
+     {"station": SUPPORTED, "misses": 2, "changed": ()}),
+    ("an inconclusive answer creates no belief to miss against",
+     case_inconclusive_creates_no_state, {"present": False, "void": False}),
+    ("an inconclusive control voids the pass", case_inconclusive_control_voids_the_pass,
+     {"void": True, "station": SUPPORTED, "misses": 0}),
+    ("ten inconclusive passes demote nothing",
+     case_ten_inconclusive_passes_demote_nothing, {"station": SUPPORTED, "misses": 0}),
+    ("every outcome is classified exactly once", case_every_outcome_is_classified,
+     {"overlap": [], "proves": ["ok", "unparsed"], "no_evidence": ["inconclusive"],
+      "counted_as_miss": ["no_response", "offline"]}),
 ]
 
 # Deliberately WRONG expectations for real scenarios. Every one must fail.
@@ -194,34 +234,15 @@ FAIL_CASES = [
     ("self-test: void passes must not accumulate", case_void_pass_does_not_accumulate_misses, {"misses": 10}),
     ("self-test: no-control must not be admissible", case_no_control_is_void, {"void": False}),
     ("self-test: a seed must not grant belief", case_seed_orders_but_never_believes, {"map_support": SUPPORTED}),
+    ("self-test: inconclusive must not count as a miss", case_inconclusive_is_not_a_miss, {"misses": 3}),
+    ("self-test: inconclusive must not invent a key", case_inconclusive_creates_no_state, {"present": True}),
+    ("self-test: an inconclusive control must not be admissible", case_inconclusive_control_voids_the_pass, {"void": False}),
+    ("self-test: no outcome may be both proof and no-evidence", case_every_outcome_is_classified, {"overlap": ["ok"]}),
 ]
 
 
-def diff(expected, got):
-    return [f"{k}: expected {v!r}, got {got.get(k)!r}" for k, v in expected.items() if got.get(k) != v]
-
-
 def main():
-    print("SELF-TEST -- every case below must FAIL:")
-    ok = True
-    for name, fn, wrong in FAIL_CASES:
-        d = diff(wrong, fn())
-        print(f"  {'ok (failed as required)' if d else 'BROKEN (passed!)':<24} {name}")
-        ok = ok and bool(d)
-    if not ok:
-        print("\nself-test did not fail where it must -- no result below is evidence")
-        return 1
-
-    print("\nCASES:")
-    failed = 0
-    for name, fn, expected in CASES:
-        d = diff(expected, fn())
-        print(f"  {'PASS' if not d else 'FAIL'}  {name}")
-        for line in d:
-            print(f"          {line}")
-        failed += bool(d)
-    print(f"\n{len(CASES) - failed}/{len(CASES)} cases passed")
-    return 1 if failed else 0
+    return run_suite(CASES, FAIL_CASES)
 
 
 if __name__ == "__main__":
