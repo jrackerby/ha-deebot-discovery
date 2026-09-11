@@ -72,6 +72,19 @@ class CapabilityState:
     support: Support = Support.UNKNOWN
     #: Consecutive misses across VOID-free passes. Reset by any answer.
     misses: int = 0
+    #: The last outcome that COUNTED for this key. None until one has.
+    #:
+    #: It exists to make one designed-for state visible. UNPARSED and OK both
+    #: mean SUPPORTED, and they mean different things to whoever is looking:
+    #: "this works" versus "the robot answered and our reader is behind, so
+    #: the entity is real and empty". Without this the two are the same row
+    #: in the map and the second is indistinguishable from a bug.
+    #:
+    #: An INCONCLUSIVE pass does not write it, for the same reason it writes
+    #: nothing else: rule 4 means that outcome is not evidence about the
+    #: capability, and recording it would make the newest unclassified error
+    #: overwrite the last real reading.
+    last_outcome: ProbeOutcome | None = None
 
     @property
     def usable(self) -> bool:
@@ -148,7 +161,7 @@ def resolve(
         before = states.get(key, CapabilityState())
 
         if outcome in _PROVES_PRESENT:
-            after = CapabilityState(Support.SUPPORTED, 0)
+            after = CapabilityState(Support.SUPPORTED, 0, outcome)
         else:
             misses = before.misses + 1
             # Rule 3. Below the threshold the belief does not move at all --
@@ -158,7 +171,9 @@ def resolve(
             support = (
                 Support.UNSUPPORTED if misses >= miss_threshold else before.support
             )
-            after = replace(before, support=support, misses=misses)
+            after = replace(
+                before, support=support, misses=misses, last_outcome=outcome
+            )
 
         states[key] = after
         if after.support is not before.support:

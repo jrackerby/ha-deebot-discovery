@@ -50,6 +50,14 @@ async def async_get_config_entry_diagnostics(
             row["evidence"] = "probed"
             row["consecutive_misses"] = state.misses if state else 0
             row["in_seed_hypothesis"] = capability.seeded
+            # THE FIELD THAT SEPARATES TWO IDENTICAL-LOOKING ROWS. `supported`
+            # via `ok` is a capability that works; `supported` via `unparsed`
+            # is one where the robot answered and our reader could not read
+            # it -- the entity is real and empty, which looks exactly like a
+            # bug until this line says otherwise.
+            row["last_outcome"] = (
+                state.last_outcome.value if state and state.last_outcome else None
+            )
         else:
             row["evidence"] = "implied"
             row["implied_by"] = capability.implied_by
