@@ -1,9 +1,10 @@
 """Constants for deebot_estate.
 
-GH-608. This integration exists because `deebot-client` resolves a robot's
+This integration exists because `deebot-client` resolves a robot's
 capabilities from a per-model lookup table keyed on an opaque class string,
-and this estate's robot (`nv8fz5`, a DEEBOT T90 PRO OMNI Care) is not in it --
-even though four sibling T90 PRO OMNI classes are. An unlisted class gets no
+and not every shipping robot is in it -- the one this was written against
+(`nv8fz5`, a DEEBOT T90 PRO OMNI Care) is absent even though four sibling
+T90 PRO OMNI classes are present. An unlisted class gets no
 entities at all, because v14 of that library removed the fallback that used
 to degrade gracefully.
 
@@ -53,7 +54,7 @@ class Support(StrEnum):
     UNSUPPORTED = "unsupported"
     #: Never probed, or only ever probed in passes that came back VOID.
     #: Distinct from UNSUPPORTED: "we have not looked" and "we looked and it
-    #: is not there" are different facts and must not collapse (LAW §11).
+    #: is not there" are different facts and must not collapse.
     UNKNOWN = "unknown"
 
 

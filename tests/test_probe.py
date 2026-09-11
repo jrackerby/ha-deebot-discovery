@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GH-608: exercise deebot_estate's capability resolver on a plain python3.
+"""Exercise the capability resolver on a plain python3.
 
 WHY IT EXISTS. This resolver decides which entities the robot gets. Its whole
 job is to survive an ambiguity that cannot be resolved by looking harder at a
@@ -9,11 +9,10 @@ that ambiguity can produce a confident wrong answer, and none of those ways
 can be observed on demand against a live robot -- you would have to break the
 wifi at the exact moment a probe pass runs.
 
-probe.py imports nothing from homeassistant and nothing from deebot_client
-(LAW §11's contract, household_state's precedent), so this runs the real
-functions directly -- no HA, no cloud, no mocking.
+probe.py imports nothing from homeassistant and nothing from deebot_client,
+so this runs the real functions directly -- no HA, no cloud, no mocking.
 
-Self-test discipline (LAW §4): FAIL_CASES assert deliberately WRONG outcomes
+Self-test discipline: FAIL_CASES assert deliberately WRONG outcomes
 for real scenarios, and main() proves every one of them actually fails before
 trusting any PASS below. A suite that cannot fail is not evidence.
 """
@@ -23,9 +22,9 @@ import os
 import sys
 import types
 
-# tests/ sits directly under the component root in BOTH layouts: this repo
-# standing alone, and this repo checked out as jrackerby/HA's
-# custom_components/deebot_estate submodule. One expression covers both.
+# tests/ sits directly under the component root in both layouts: this repo
+# standing alone, and this repo installed as custom_components/deebot_estate.
+# One expression covers both.
 PKG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
