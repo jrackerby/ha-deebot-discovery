@@ -175,6 +175,54 @@ jobs:
           print("seed capabilities carry every attribute the platforms navigate")
           PY
 
+  scope:
+    # THE NAME IS LOAD-BEARING. `scope` is one of only two REQUIRED status
+    # checks on master (the other is `tests`), and a required context is a
+    # FIXED list of job names: a job that is renamed or deleted never reports,
+    # so every open request wedges rather than failing. This job was deleted
+    # once, in the commit that added manifest.json, and the request that did
+    # it could not merge.
+    #
+    # WHAT IT ASSERTS IS NOW THE INVERSE OF WHAT IT USED TO. It was written to
+    # go red the moment a manifest.json appeared, because this repo held a
+    # resolver and no integration. That happened, so the assertion is turned
+    # around: the repo must now BE an installable integration, and -- the part
+    # that matters more -- the jobs that actually validate it must still
+    # exist. hassfest, imports and hacs are NOT required contexts, so any of
+    # them could be deleted and master would accept the change without
+    # comment. This job is where that gets noticed.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: assert this repo is an integration, and still validated as one
+        run: |
+          set -euo pipefail
+          MISSING=""
+          for f in manifest.json hacs.json strings.json translations/en.json; do
+            test -f "$f" || MISSING="$MISSING $f"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::this repo claims to be an installable integration but is missing:$MISSING"
+            exit 1
+          fi
+
+          # A sweep that cannot assert its own completeness is not evidence,
+          # and an empty checkout would satisfy every test above.
+          COUNT=$(ls ./*.py | wc -l)
+          echo "python modules at root: $COUNT"
+          test "$COUNT" -ge 10 \
+            || { echo "::error::only $COUNT module(s) at root -- the checks above passed over a tree that cannot be this integration"; exit 1; }
+
+          # The real gates. Only `tests` and `scope` are required contexts, so
+          # these three can be removed without master noticing. Here is where
+          # it notices.
+          for job in hassfest imports hacs; do
+            grep -qE "^  $job:" .github/workflows/validate.yml \
+              || { echo "::error::the '$job' job is gone from validate.yml, and it is not a required context -- nothing else would have caught this"; exit 1; }
+          done
+          echo "manifest present, and hassfest/imports/hacs all still declared"
+
   hacs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
