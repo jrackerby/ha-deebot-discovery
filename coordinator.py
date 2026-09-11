@@ -35,6 +35,7 @@ from deebot_client.exceptions import (
 from deebot_client.message import HandlingState
 from deebot_client.models import DeviceInfo
 from deebot_client.mqtt_client import MqttClient, create_mqtt_config
+from deebot_client.util import md5
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
@@ -177,8 +178,10 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
         rest_config = create_rest_config(
             session, device_id=device_id, alpha_2_country=country
         )
+        # `password_hash`, not the password -- see config_flow.py for what
+        # sending the wrong one looks like from the outside.
         authenticator = Authenticator(
-            rest_config, data[CONF_USERNAME], data[CONF_PASSWORD]
+            rest_config, data[CONF_USERNAME], md5(data[CONF_PASSWORD])
         )
         api_client = ApiClient(authenticator)
 

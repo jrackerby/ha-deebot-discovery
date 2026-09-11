@@ -258,8 +258,16 @@ class DeebotConfigFlow(ConfigFlow, domain=DOMAIN):
             device_id=self._device_id,
             alpha_2_country=self._input[CONF_COUNTRY],
         )
+        # THE THIRD PARAMETER IS `password_hash`, NOT THE PASSWORD. deebot-client
+        # puts whatever it is given straight into the login call's `password`
+        # field, so a plaintext password there is sent verbatim and the cloud
+        # answers `invalid_auth` -- indistinguishable, from the flow, from the
+        # owner mistyping it. The md5 is the vendor's WIRE FORMAT and nothing
+        # else: it is not protection, and it is not a reason to store the
+        # digest instead of the password, which reauth and the Ecovacs app
+        # both still need.
         return Authenticator(
-            config, self._input[CONF_USERNAME], self._input[CONF_PASSWORD]
+            config, self._input[CONF_USERNAME], md5(self._input[CONF_PASSWORD])
         )
 
     async def _async_request_verification_code(self) -> None:

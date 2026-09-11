@@ -367,6 +367,46 @@ def check_manifest_agrees_with_the_code(tree):
     return findings
 
 
+def check_the_password_is_hashed_before_it_is_sent(tree):
+    """`Authenticator`'s third argument must be an md5, never the password.
+
+    THE DEFECT THIS EXISTS FOR SHIPPED ONCE. deebot-client names the parameter
+    `password_hash` and puts whatever it is handed straight into the login
+    call's `password` field, so passing the plaintext is not a type error, not
+    an import error and not a crash -- the cloud simply answers `invalid_auth`,
+    which from inside the config flow is indistinguishable from the owner
+    mistyping their password. Both call sites had it, the modules imported
+    cleanly against real core, and every suite was green.
+
+    Static because it has to be: the only dynamic proof is a live login
+    against someone's real Ecovacs account, which no suite can have.
+    """
+    findings = []
+    for name, module in _modules(tree).items():
+        for node in ast.walk(module):
+            if not isinstance(node, ast.Call):
+                continue
+            if (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) != (
+                "Authenticator"
+            ):
+                continue
+            # Positional third, or the keyword the library names it by.
+            argument = node.args[2] if len(node.args) > 2 else _keyword(node, "password_hash")
+            hashed = (
+                isinstance(argument, ast.Call)
+                and (getattr(argument.func, "id", None) or getattr(argument.func, "attr", None))
+                == "md5"
+            )
+            if not hashed:
+                findings.append(
+                    f"{name}.py line {node.lineno}: Authenticator is built with a "
+                    "value that did not pass through md5 -- deebot-client sends "
+                    "that field verbatim, so a plaintext password reads as "
+                    "invalid_auth and looks like a typo"
+                )
+    return findings
+
+
 CHECKS = (
     ("everything parses", check_everything_parses),
     ("the pure layer imports neither HA nor the vendor library", check_pure_layer_stays_pure),
@@ -378,6 +418,7 @@ CHECKS = (
     ("translations and code agree", check_translations_and_code_agree),
     ("the suite imports only the standard library", check_suite_imports_only_the_standard_library),
     ("the manifest agrees with the code", check_manifest_agrees_with_the_code),
+    ("the password is hashed before it is sent", check_the_password_is_hashed_before_it_is_sent),
 )
 
 TREE = read_tree()
@@ -497,6 +538,16 @@ FAIL_CASES = [
             "tests/test_classify.py",
             "import os\nimport sys",
             "import os\nimport sys\n\nimport yaml",
+        ),
+        {"findings": []},
+    ),
+    (
+        "self-test: a plaintext password must be found",
+        _broken_case(
+            check_the_password_is_hashed_before_it_is_sent,
+            "coordinator.py",
+            "rest_config, data[CONF_USERNAME], md5(data[CONF_PASSWORD])",
+            "rest_config, data[CONF_USERNAME], data[CONF_PASSWORD]",
         ),
         {"findings": []},
     ),
