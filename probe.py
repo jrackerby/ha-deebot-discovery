@@ -1,8 +1,8 @@
-"""Resolve a robot's capability map from probe results. GH-608.
+"""Resolve a robot's capability map from probe results.
 
 IMPORTS NOTHING FROM `homeassistant` AND NOTHING FROM `deebot_client` --
-same contract as household_state's resolver (LAW §11), and for the same
-reason: this is the part where being wrong is expensive, so it has to be
+the same contract `jrackerby/household-state`'s resolver keeps, and for the
+same reason: this is the part where being wrong is expensive, so it has to be
 exercisable on a plain python3 with no HA, no cloud account, and no robot.
 
 WHAT MAKES THIS HARD. The robot does not publish what it supports; there is
@@ -10,8 +10,9 @@ no `getSupportedFunctions` anywhere in the protocol, which is precisely why
 upstream maintains 55k lines of hand-written per-model tables. So support
 must be inferred from whether a command answers -- and the failure code that
 means "not supported" is the SAME code that means "the network dropped it"
-(errno 500). LAW §9: name the benign state that produces the same output,
-then measure a known instance of it. That is what the control is for.
+(errno 500). The discipline that answers it: name the benign state that
+produces the same output, then measure a known instance of it. That is what
+the control is for.
 
 THE THREE RULES, and each exists because of a specific way this can lie:
 
@@ -21,11 +22,11 @@ THE THREE RULES, and each exists because of a specific way this can lie:
      one bad minute of wifi silently strips every capability at once, and
      the stripped map looks exactly like a correct reading of a robot that
      lost its features. A monitor whose blind spot correlates with what it
-     monitors is worse than none (LAW §10).
+     monitors is worse than none.
   2. A PASS WITH NO CONTROL IS ALSO VOID, not merely unguarded. A sweep that
-     cannot assert its own completeness is not evidence (LAW §5).
+     cannot assert its own completeness is not evidence.
   3. PROMOTE ON ONE OK, DEMOTE ONLY ON `miss_threshold` CONSECUTIVE MISSES
-     ACROSS VOID-FREE PASSES. Fall dwell, never rise dwell (LAW §11).
+     ACROSS VOID-FREE PASSES. Fall dwell, never rise dwell.
 
 WHAT IT DELIBERATELY DOES NOT DO: it never invents a capability it has not
 seen answer. A seed hypothesis borrowed from a sibling model marks a key as
