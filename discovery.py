@@ -123,7 +123,20 @@ CAPABILITIES: Final[tuple[Capability, ...]] = (
     Capability(key="life_span", description="Consumable wear, per component."),
     Capability(key="stats_clean", description="Statistics for the current job."),
     Capability(key="stats_total", description="Lifetime statistics."),
-    Capability(key="clean_log", description="History of finished jobs."),
+    Capability(
+        key="clean_log",
+        description=(
+            "History of finished jobs. NOT A ROBOT CAPABILITY: GetCleanLogs "
+            "sets `_targets_bot = False` and queries the cloud's own log "
+            "service, so this probe answers for Ecovacs rather than for the "
+            "hardware and can never miss because a robot lacks the feature. "
+            "It still gates the right entity -- that entity reads exactly "
+            "this endpoint -- but an EMPTY result is normal and is not a "
+            "fault: measured live, the service returned no rows for a robot "
+            "with 27 recorded cleanings, and deebot-client's own comment on "
+            "the handler says the API is changing."
+        ),
+    ),
     Capability(key="network", description="Wifi signal and addresses."),
     Capability(key="volume", description="Speaker volume."),
     Capability(key="child_lock", description="Child lock."),
