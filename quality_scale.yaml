@@ -1,0 +1,215 @@
+# Integration Quality Scale self-assessment. The scale is this component's
+# build standard; Bronze is the floor and Silver the target for anything
+# reading a device. The rule names below were read from ALL_RULES in
+# home-assistant/core's script/hassfest/quality_scale.py, not from a
+# remembered summary -- the docs page names the tiers and not the rules.
+#
+# THIS FILE IS NOT A GATE, AND SAYING SO IS THE POINT. hassfest's
+# validate_iqs_file() begins `if not integration.core: return`, so for a
+# custom integration nothing here is checked by anything. That is also why
+# manifest.json carries NO `quality_scale` key: the schema would accept
+# "silver" and no validator would ever test the claim, which is a confident
+# assertion with no gate behind it. The rules below that are `todo` are
+# todo.
+
+rules:
+  # ---- BRONZE ----
+  action-setup:
+    status: exempt
+    comment: >-
+      No custom actions. Everything this integration can do is an entity --
+      a vacuum, a switch, a button -- so a service would be a second way to
+      do what a state change already does.
+  appropriate-polling:
+    status: done
+    comment: >-
+      READINGS ARE NOT POLLED AT ALL: they arrive over MQTT push through
+      deebot-client's event bus, and entities subscribe to it. The
+      coordinator's three-hour interval drives a PROBE PASS, which is a
+      different thing -- it is what lets a firmware update add a function and
+      be seen, and what accumulates the consecutive misses a demotion needs.
+      One pass is about one cloud call per probed capability.
+  brands:
+    status: todo
+    comment: No accepted PR against home-assistant/brands for this domain.
+  common-modules:
+    status: done
+    comment: coordinator.py and entity.py, plus the pure layer they sit on.
+  config-flow:
+    status: done
+    comment: >-
+      Account, then device verification where Ecovacs demands it, then which
+      robot. The country selector is required because it decides which
+      regional servers the robot is reachable on at all.
+  config-flow-test-coverage:
+    status: todo
+    comment: >-
+      The suites here run on a plain python3 with neither Home Assistant nor
+      deebot-client installed, which is what makes them attributable to a
+      decision in this repo. The flow needs core's own test harness and is
+      unexercised.
+  dependency-transparency:
+    status: done
+    comment: >-
+      deebot-client is open source (DeebotUniverse/client.py), published to
+      PyPI, and carries its own CI. Declared `>=18.5.1` rather than pinned
+      `==`: Home Assistant's built-in `ecovacs` integration installs its own
+      pin of the same library into the same site-packages, and an `==` here
+      would fight it -- downgrading the library out from under a core
+      integration the next time core bumps it. The floor is the version whose
+      sibling tables were measured. This integration also makes ONE reach
+      into a private method, `Command._execute`, and coordinator.py carries
+      the reason in full: the public `execute()` discards the raw response on
+      exactly the failure path whose errno this integration has to read.
+  docs-actions: { status: exempt, comment: No actions. }
+  docs-conditions: { status: exempt, comment: No conditions provided. }
+  docs-high-level-description: { status: done, comment: README.md. }
+  docs-installation-instructions: { status: done, comment: README.md. }
+  docs-removal-instructions:
+    status: done
+    comment: >-
+      README.md, and it says the thing that is easy to miss: the capability
+      map is this integration's own ledger and nothing else keeps it, so
+      removing the entry deletes what was measured. It is rebuilt by probing,
+      which costs a pass, not a reinstall.
+  docs-triggers: { status: exempt, comment: No triggers provided. }
+  entity-event-setup:
+    status: done
+    comment: >-
+      entity.py's `_subscribe` hands every unsubscribe to `async_on_remove`,
+      and every platform subscribes from `async_added_to_hass`. Nothing
+      subscribes from `__init__`.
+  entity-unique-id:
+    status: done
+    comment: "`<did>_<description key>`, and the description keys are stable."
+  has-entity-name: { status: done, comment: entity.py sets it once. }
+  runtime-data:
+    status: done
+    comment: The coordinator lives on the entry; nothing in hass.data.
+  test-before-configure:
+    status: done
+    comment: >-
+      The flow authenticates and then LISTS THE ACCOUNT'S ROBOTS over the
+      same REST path the integration reads every day, and refuses to create
+      an entry unless a robot is there. `not_supported` is read first,
+      because that is the list a robot with no hardware table lands in --
+      a flow that offered only recognised robots would show an empty list to
+      exactly the person this integration is for.
+  test-before-setup:
+    status: done
+    comment: >-
+      `async_connect` exercises REST and then MQTT in the order the
+      integration will use them, and the first probe pass runs before any
+      platform is forwarded. A first pass that establishes NOTHING raises
+      rather than loading an entry with no entities -- an entry that loaded
+      empty reads exactly like a robot that has nothing.
+  unique-config-entry:
+    status: done
+    comment: unique_id is the robot's `did`, with an explicit abort.
+
+  # ---- SILVER ----
+  action-exceptions:
+    status: done
+    comment: >-
+      `DeebotEntity._execute` refuses to report a silent no-op as success.
+      deebot-client answers a failed command with an empty dict, so returning
+      quietly would leave a switch that flipped back with nothing in the log.
+  config-entry-unloading:
+    status: done
+    comment: >-
+      Platforms unloaded, then the robot, the broker session and the
+      authenticator, in that order. The unloading flag is set BEFORE teardown
+      so nothing races to log a connectivity crossing for a session that is
+      deliberately going away.
+  docs-configuration-parameters: { status: exempt, comment: No options flow. }
+  docs-installation-parameters: { status: done, comment: README.md. }
+  entity-unavailable:
+    status: done
+    comment: >-
+      entity.py splits three cases that are easy to collapse into one: we
+      cannot reach the cloud, the cloud says the robot is offline, and the
+      capability behind this entity has been demoted. The connectivity
+      binary sensor is the deliberate exception and stays available -- an
+      entity that vanishes with its subject cannot report the subject down.
+  integration-owner: { status: done, comment: codeowners @jrackerby. }
+  log-when-unavailable:
+    status: done
+    comment: >-
+      Once at the crossing and once on recovery, at INFO, deduped on a stable
+      condition token rather than the rendered message, and armed only once
+      Home Assistant reaches RUNNING. The gate does not RECORD while silent:
+      a condition marked as already-reported during startup would then never
+      log at all, which is worse than the noise it was meant to avoid.
+  parallel-updates:
+    status: done
+    comment: 0 on the read-only platforms, 1 on the ones that command.
+  reauthentication-flow:
+    status: done
+    comment: >-
+      Keeps the account, the country and -- load-bearing -- the client id, so
+      reauthenticating does not trigger a device verification the owner has
+      already done once.
+  test-coverage:
+    status: todo
+    comment: >-
+      Four suites, none of which need Home Assistant: the resolver, the
+      response classifier, the capability catalogue, and a static wiring
+      sweep over the modules a plain python3 cannot import. What is missing
+      is coverage that RUNS the Home-Assistant-coupled code; the CI imports
+      job proves those modules load against real core and nothing more.
+
+  # ---- GOLD ---- (not claimed; recorded because the rules still govern)
+  devices: { status: done, comment: One device row per robot, carrying its class string. }
+  diagnostics:
+    status: done
+    comment: >-
+      And written to be read alone: every capability carries what it means,
+      whether it was probed or inferred, and for an inferred one, from what
+      and why. A dump that said `{"station_action": "supported"}` would be
+      indistinguishable from the per-model table this replaces.
+  discovery:
+    status: exempt
+    comment: >-
+      Ecovacs robots are reachable only through the vendor cloud; there is no
+      local protocol to discover them on.
+  discovery-update-info: { status: exempt, comment: See discovery. }
+  docs-data-update: { status: done, comment: README.md explains push versus probe cadence. }
+  docs-examples: { status: todo }
+  docs-known-limitations: { status: done, comment: README.md. }
+  docs-supported-devices: { status: done, comment: README.md names the robot and its class. }
+  docs-supported-functions: { status: done, comment: README.md. }
+  docs-troubleshooting: { status: done, comment: README.md. }
+  docs-use-cases: { status: todo }
+  dynamic-devices:
+    status: exempt
+    comment: >-
+      One entry, one robot, so that removing one takes only its own ledger. A
+      robot added to the account later is a new entry through the flow.
+  entity-category: { status: done }
+  entity-device-class: { status: done }
+  entity-disabled-by-default:
+    status: todo
+    comment: >-
+      Nothing is disabled by default. The diagnostic readings are the
+      candidates, and the case has not been made either way.
+  entity-translations: { status: done, comment: strings.json, checked by the wiring suite in both directions. }
+  exception-translations: { status: done, comment: The one raised exception is translated. }
+  icon-translations: { status: todo, comment: No icons.json. }
+  reconfiguration-flow: { status: todo }
+  repair-issues:
+    status: todo
+    comment: >-
+      The obvious candidate is a capability demoted to UNSUPPORTED while its
+      entities remain, which is currently only visible in diagnostics.
+  stale-devices:
+    status: exempt
+    comment: >-
+      A robot removed from the account fails setup with a message naming it
+      rather than leaving a device row behind.
+
+  # ---- PLATINUM ----
+  async-dependency: { status: done, comment: deebot-client is async throughout. }
+  inject-websession:
+    status: done
+    comment: Home Assistant's shared client session is passed to create_rest_config.
+  strict-typing: { status: todo, comment: No py.typed marker and no type check in CI. }

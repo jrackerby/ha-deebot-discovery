@@ -3,23 +3,20 @@
 A Home Assistant integration for Ecovacs Deebot robots that **discovers** what
 a robot supports instead of looking it up in a table.
 
-**This repository is not yet an installable integration.** It holds the
-capability resolver and its constants — no `manifest.json`, no `hacs.json`, no
-platforms, no config flow. HACS cannot install it, and it is published here for
-the resolver's sake rather than as something to add to Home Assistant.
-
 ## Why it exists
 
-`deebot-client` resolves a robot's capabilities from a per-model lookup table
-keyed on an opaque class string. The robot this was written for — a DEEBOT
-T90 PRO OMNI Care, class `nv8fz5` — is in none of that library's 248 hardware modules, even
-though four sibling T90 PRO OMNI classes are. Since v14 removed the fallback,
-`get_static_device_info` returns `None` for an unknown class and the robot gets
-**zero** entities.
+`deebot-client` — the library Home Assistant's built-in `ecovacs` integration
+is built on — resolves a robot's capabilities from a per-model lookup table
+keyed on an opaque class string. The robot this was written for, a **DEEBOT T90
+PRO OMNI Care** with class `nv8fz5`, is in none of that library's 248 hardware
+modules, even though four sibling *T90 PRO OMNI* classes are. Since v14 removed
+the fallback, `get_static_device_info` returns `None` for an unknown class and
+the robot gets **zero entities**. A retail variant of a supported model gets
+nothing.
 
-The library is 55,184 lines of per-model capability tables against 9,021 lines
-of model-agnostic protocol. The part that fails here is the table; the part
-worth depending on is the protocol.
+The library is tens of thousands of lines of per-model capability tables
+against a few thousand lines of model-agnostic protocol. The part that fails
+here is the table. The part worth depending on is the protocol.
 
 ## The hard part
 
@@ -30,11 +27,12 @@ inferred from whether a command answers, and **the failure code that means
 "not supported" is the same code that means "the network ate it"**
 (`errno 500`, in deebot-client's own words).
 
-`probe.py` is the whole answer to that ambiguity, and it imports nothing from
-`homeassistant` and nothing from `deebot_client`, so it is exercisable on a
-plain `python3` with no HA, no cloud account and no robot.
+`probe.py` and `classify.py` are the whole answer to that ambiguity, and they
+import nothing from `homeassistant` and nothing from `deebot_client`, so they
+are exercisable on a plain `python3` with no Home Assistant, no cloud account
+and no robot.
 
-Three rules, each because of a specific way the ambiguity can produce a
+Four rules, each because of a specific way the ambiguity can produce a
 confident wrong answer:
 
 1. **Every pass carries a control** — a command this robot has already
@@ -43,12 +41,147 @@ confident wrong answer:
    every capability at once, and the stripped map looks exactly like a correct
    reading of a robot that lost its features.
 2. **A pass with no control is also VOID**, not merely unguarded.
-3. **Promote on one OK; demote only after `miss_threshold` consecutive misses
-   across VOID-free passes.** Fall dwell, never rise dwell.
+3. **Promote on one OK; demote only after three consecutive misses across
+   VOID-free passes.** Fall dwell, never rise dwell.
+4. **An outcome nobody has classified is not a miss.** Exactly one failure
+   code carries the "or does not support the command" reading. Everything else
+   the cloud can answer leaves the belief and the streak untouched.
 
 It never invents a capability it has not seen answer. A seed hypothesis
 borrowed from a sibling model marks a key as worth probing *first*; it never
 marks it *supported*.
+
+### The one thing that is inferred, and how it is kept honest
+
+Some capabilities have no read command at all. `Charge` drives the robot to
+the dock; `PlaySound` makes it beep; a station action runs a mop wash. Probing
+those by doing them is not probing — it is operating someone's robot at 3am to
+find out whether it can be operated.
+
+So those are **implied**, and an implication may only hang off a capability
+that was **measured on this robot**:
+
+| Inferred | From | Why |
+| --- | --- | --- |
+| Start / pause / stop | `state` | The robot answered with a state machine; the actions drive it. |
+| Return to dock | `state` | The state probe is `GetChargeState`, so the robot models a charge state. |
+| Locate (beep) | `volume` | `GetVolume` answering proves the speaker. |
+| Station actions, station state | `auto_empty` | `GetAutoEmpty` is station-only, so an answer proves a station is attached. |
+
+An implication whose antecedent was itself implied would launder a guess
+through a second guess. The catalogue refuses one at import, and the suite
+proves it refuses it.
+
+## Supported devices
+
+Any Ecovacs robot reachable through the Ecovacs cloud, whether or not
+deebot-client recognises its class. The case it was built for is the one it
+handles that nothing else does: a class with **no** hardware table.
+
+The protocol client is built from a sibling class's table — `rx6f4s`, one of
+four *DEEBOT T90 PRO OMNI* classes whose modules are byte-identical in
+deebot-client 18.5.1. That table supplies the object the library needs to talk
+at all, and the probe order. It does not decide which entities exist.
+
+## Supported functions
+
+Entities appear for whatever the robot answers for, which on a T90 PRO OMNI
+Care is: the vacuum itself (start, pause, stop, return, locate, fan speed),
+battery, error code and problem, state, work mode, water flow and mop-attached,
+consumable wear and its reset buttons, station state and station actions,
+auto-empty frequency, cleaning and lifetime statistics, the last clean, Wi-Fi
+signal, volume, cleaning passes, mop wash interval, child lock, TrueDetect,
+ZigZag mopping, voice assistant, continue-after-charging and automatic firmware
+updates.
+
+On a robot that answers fewer of those, fewer entities appear. That is the
+whole point: **degrade to fewer features rather than to none.**
+
+## Installation
+
+HACS → three-dot menu → **Custom repositories** → add
+`https://github.com/jrackerby/ha-deebot-discovery` as an **Integration**, then
+install it and restart Home Assistant.
+
+Then **Settings → Devices & Services → Add Integration → Deebot Discovery**.
+
+### What it asks for
+
+| Field | Notes |
+| --- | --- |
+| Email address | The Ecovacs account the robot is registered to. |
+| Password | Stored in the config entry, as Home Assistant stores every cloud credential. |
+| Country | Must match the country the Ecovacs app uses — it selects which regional servers the robot is reachable on. |
+| Verification code | Asked only when Ecovacs demands it. One-time, emailed, and per Home Assistant installation rather than per sign-in. |
+
+If the account has more than one robot, the flow asks which. One entry per
+robot, so removing one leaves the others untouched.
+
+## How data is updated
+
+Readings arrive over **MQTT push**. Nothing polls them.
+
+Separately, a **probe pass** runs every three hours. That pass is not a state
+refresh: it is what decides which entities should exist. It keeps running
+rather than settling once because a firmware update can add a function, and
+because a demotion costs three consecutive misses across VOID-free passes.
+
+A capability promoted by a later pass gets its entity without a reload.
+
+## Removing it
+
+Delete the config entry (**Settings → Devices & Services**, three dots,
+**Delete**). The device and its entities go with it.
+
+**The capability map goes too, and nothing else keeps a copy.** It is this
+integration's own ledger — what was measured about this robot and when. That
+is deliberate: a map restored for a robot that is no longer on the account
+would be belief with no measurement behind it. Adding the robot again rebuilds
+the map, which costs one probe pass, not a reinstall.
+
+## Known limitations
+
+- **Maps are not implemented.** No room cleaning, no map card, no positions.
+  The vacuum cleans everything or it cleans nothing.
+- **The option lists are borrowed.** There is no read command that enumerates
+  the fan speeds or work modes a robot *accepts* — the protocol answers with
+  the current value and nothing else. Those lists come from the sibling
+  table. The entity only exists because the robot answered the read that owns
+  them, and an option the robot rejects raises rather than failing silently,
+  but the list itself is not measured.
+- **A demoted capability keeps its entity**, reading unavailable. Promotion is
+  cheap and reversible; deletion would take the user's automations and history
+  with it on the strength of three consecutive misses.
+- **No local control.** Everything goes through the Ecovacs cloud, including
+  the probe passes.
+- **The seed is a dependency on a corner of deebot-client that moves.** If the
+  sibling class is ever dropped from the library, setup fails loudly with a
+  message saying so. CI checks it on every run.
+
+## Troubleshooting
+
+**No entities at all after setup.** The first probe pass establishes what
+exists, and it runs before any platform is set up. If it could not establish
+anything, setup fails and retries rather than loading an empty entry — so an
+entry that is retrying means the robot is not answering. Check that the robot
+is powered and on wifi, and that the country matches the Ecovacs app's.
+
+**Fewer entities than expected.** Download diagnostics (device page → three
+dots → **Download diagnostics**). Every capability is listed with what it
+means, whether it was probed or inferred, whether it is currently usable, and
+how many consecutive misses it has. A capability at `unknown` has not been
+established; one at `unsupported` missed three passes in a row.
+
+**An entity is unavailable.** Three different things produce that: the cloud
+is unreachable, the cloud says the robot is offline, or the capability behind
+it was demoted. The connectivity binary sensor stays available in all three —
+it is the one entity that must not disappear with its subject — so read it
+first.
+
+**A command did nothing and raised.** The message names the command. Ecovacs
+answers a command it cannot carry out the same way it answers one the robot
+does not support, so a repeated failure on one entity is worth reading
+diagnostics over.
 
 ## Tests
 
@@ -56,12 +189,23 @@ marks it *supported*.
 ./tools/run_tests.sh
 ```
 
-Standard library only. `FAIL_CASES` assert deliberately wrong outcomes for real
-scenarios and the runner proves every one of them actually fails before
-trusting any pass — a suite that cannot fail is not evidence.
+Standard library only — no Home Assistant, no deebot-client, no pytest. Four
+suites: the resolver, the raw-response classifier, the capability catalogue,
+and a static wiring sweep over the modules a plain `python3` cannot import.
+
+Every suite asserts deliberately **wrong** outcomes for real scenarios and
+proves each one actually fails before trusting any pass. A suite that cannot
+fail is not evidence.
+
+What the suites do **not** prove is that any of it runs: that is the CI
+`imports` job, which installs real Home Assistant and real deebot-client and
+imports every module against them.
 
 ## Layout
 
-Root layout: the integration's modules sit at the repository root rather than
-under `custom_components/`, so the `hacs.json` this repo does not yet carry
-will declare `content_in_root: true` when it arrives.
+The integration's modules sit at the repository root rather than under
+`custom_components/`, which is the layout HACS installs from — `hacs.json`
+declares `content_in_root`. CI stages the `custom_components/deebot_estate/`
+layout that hassfest expects.
+
+The domain is `deebot_estate`.

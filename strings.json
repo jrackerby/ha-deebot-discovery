@@ -1,0 +1,171 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Ecovacs account",
+        "description": "Sign in with the account the robot is registered to. The country must match the one the Ecovacs app uses, because it selects which regional servers the robot is reachable on.",
+        "data": {
+          "username": "Email address",
+          "password": "Password",
+          "country": "Country"
+        },
+        "data_description": {
+          "country": "The country your Ecovacs account was created in."
+        }
+      },
+      "verification": {
+        "title": "Verify this device",
+        "description": "Ecovacs has emailed a one-time code to verify this Home Assistant installation. Enter it below. This is asked once per installation, not once per sign-in.",
+        "data": {
+          "verification_code": "Verification code"
+        }
+      },
+      "robot": {
+        "title": "Choose a robot",
+        "description": "One entry per robot, so that removing one leaves the others untouched.",
+        "data": {
+          "did": "Robot"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign in again",
+        "description": "The Ecovacs cloud rejected the stored credentials for {username}.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the Ecovacs cloud.",
+      "invalid_auth": "The Ecovacs cloud rejected that email address or password.",
+      "invalid_verification_code": "That code was not accepted. It may have expired; a new one can be requested by starting again.",
+      "no_robots": "Signed in, but the account lists no robots."
+    },
+    "abort": {
+      "already_configured": "That robot already has an entry.",
+      "reauth_successful": "Signed in again."
+    }
+  },
+  "exceptions": {
+    "command_failed": {
+      "message": "The robot did not carry out {command}. It may be offline, or it may not support that command."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "mop_attached": {
+        "name": "Mop attached"
+      }
+    },
+    "button": {
+      "station_empty_dustbin": {
+        "name": "Empty dustbin"
+      },
+      "station_wash_mop": {
+        "name": "Wash mop"
+      },
+      "station_dry_mop": {
+        "name": "Dry mop"
+      },
+      "station_clean_base": {
+        "name": "Clean base"
+      },
+      "reset_life_span": {
+        "name": "Reset {component} life"
+      }
+    },
+    "number": {
+      "volume": {
+        "name": "Volume"
+      },
+      "clean_count": {
+        "name": "Cleaning passes"
+      },
+      "water_amount": {
+        "name": "Water flow"
+      },
+      "mop_auto_wash_frequency": {
+        "name": "Mop wash interval"
+      }
+    },
+    "select": {
+      "work_mode": {
+        "name": "Work mode",
+        "state": {
+          "vacuum_and_mop": "Vacuum and mop",
+          "vacuum": "Vacuum",
+          "mop": "Mop",
+          "mop_after_vacuum": "Mop after vacuum"
+        }
+      },
+      "auto_empty": {
+        "name": "Auto-empty frequency",
+        "state": {
+          "auto": "Auto",
+          "smart": "Smart",
+          "min_10": "Every 10 minutes",
+          "min_15": "Every 15 minutes",
+          "min_25": "Every 25 minutes"
+        }
+      }
+    },
+    "sensor": {
+      "error": {
+        "name": "Error code"
+      },
+      "wifi_rssi": {
+        "name": "Wi-Fi signal"
+      },
+      "clean_area": {
+        "name": "Cleaned area"
+      },
+      "clean_duration": {
+        "name": "Cleaning time"
+      },
+      "total_clean_area": {
+        "name": "Total cleaned area"
+      },
+      "total_clean_duration": {
+        "name": "Total cleaning time"
+      },
+      "total_cleanings": {
+        "name": "Total cleanings"
+      },
+      "last_clean": {
+        "name": "Last clean"
+      },
+      "life_span": {
+        "name": "{component} life"
+      },
+      "station_state": {
+        "name": "Station",
+        "state": {
+          "idle": "Idle",
+          "emptying_dustbin": "Emptying dustbin",
+          "washing_mop": "Washing mop",
+          "drying_mop": "Drying mop"
+        }
+      }
+    },
+    "switch": {
+      "child_lock": {
+        "name": "Child lock"
+      },
+      "true_detect": {
+        "name": "TrueDetect obstacle avoidance"
+      },
+      "sweep_mode": {
+        "name": "ZigZag mopping"
+      },
+      "voice_assistant": {
+        "name": "Voice assistant"
+      },
+      "continuous_cleaning": {
+        "name": "Continue after charging"
+      },
+      "ota": {
+        "name": "Automatic firmware updates"
+      }
+    }
+  }
+}

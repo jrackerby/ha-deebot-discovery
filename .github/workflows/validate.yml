@@ -1,5 +1,9 @@
 name: validate
 
+# Same posture as the rest of the fleet: a repo that only validates on push
+# goes quietly stale between commits, and this one sits untouched for months
+# between robots doing something new.
+
 on:
   push:
     branches: [master]
@@ -19,6 +23,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  hassfest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Into a subdirectory ON PURPOSE -- the staging step below builds the
+      # layout hassfest expects AT THE WORKSPACE ROOT and cannot do that if
+      # the repo is already checked out there.
+      - uses: actions/checkout@v4
+        with:
+          path: src
+
+      # home-assistant/actions/hassfest takes no path input: it scans
+      # custom_components/* under the workspace. This repo keeps the
+      # integration at its ROOT (hacs.json content_in_root) because that is
+      # the layout HACS installs from, as custom_components/deebot_estate.
+      - name: stage the custom_components layout hassfest scans
+        run: |
+          set -euo pipefail
+          mkdir -p "custom_components/$DOMAIN"
+          cp -a src/. "custom_components/$DOMAIN/"
+          rm -rf "custom_components/$DOMAIN/.git" \
+                 "custom_components/$DOMAIN/.github" \
+                 "custom_components/$DOMAIN/tests" \
+                 "custom_components/$DOMAIN/tools"
+          test -f "custom_components/$DOMAIN/manifest.json" \
+            || { echo "CANNOT RUN: staging produced no manifest.json -- hassfest would pass vacuously"; exit 1; }
+          echo "staged $(find "custom_components/$DOMAIN" -type f | wc -l) files"
+
+      # What this does NOT do, so nobody reads more into a green run than is
+      # there: hassfest's validate_iqs_file opens with `if not
+      # integration.core: return`, so quality_scale.yaml goes unread for a
+      # custom component while the manifest schema still ACCEPTS a
+      # quality_scale key. A tier declared there is a self-claim with no gate
+      # behind it.
+      - uses: home-assistant/actions/hassfest@master
+
   tests:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -28,45 +68,137 @@ jobs:
         with:
           python-version: "3.13"
 
-      # NO homeassistant and NO deebot-client, deliberately: const.py and
-      # probe.py import neither, which is the whole contract of keeping the
-      # capability resolver in a module that cannot reach either one
-      # (the same contract household_state's resolver keeps). The suite drives
-      # the real functions -- no mocks -- and a red result is attributable to a
-      # decision in this repo rather than to a core release or a vendor library
-      # moving underneath it.
+      # NO homeassistant and NO deebot-client, deliberately. const.py,
+      # probe.py, classify.py and discovery.py import neither, which is the
+      # whole contract of keeping the capability resolver in modules that
+      # cannot reach either one; the wiring suite reads every other module
+      # with `ast` rather than importing it. So a red result here is
+      # attributable to a decision in this repo rather than to a core release
+      # or a vendor library moving underneath it. The imports job below is
+      # where real core has its say.
       - name: run every suite
         run: ./tools/run_tests.sh
 
-  scope:
-    # THIS REPO IS NOT YET AN INSTALLABLE INTEGRATION, and this job exists so
-    # that fact is asserted rather than assumed. It holds a capability resolver
-    # and its constants -- no manifest.json, no hacs.json, no platforms -- so
-    # hassfest, the real-core import job and HACS validation all have nothing
-    # to validate and are absent rather than present-and-vacuous.
-    #
-    # The moment a manifest.json lands, this job goes RED and says what to add.
-    # Without it, the integration would ship with no hassfest gate at all and
-    # nothing would point that out -- a workflow file with four green jobs that
-    # never looked at the manifest reads exactly like one that did.
+  imports:
+    # The gate the static suites cannot be: every module except the pure four
+    # imports `homeassistant`, and seed.py imports `deebot_client`, so a
+    # symbol that moved or was removed is invisible to them and would first
+    # show up as the component failing to set up on the live host after a
+    # restart. hassfest does not catch it either -- it validates the manifest
+    # and the translations, never an import.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: assert this repo is still resolver-only
+      - uses: actions/setup-python@v5
+        with:
+          # 3.14, NOT 3.13. Home Assistant 2026.x declares Requires-Python
+          # >=3.14.2 and deebot-client 18.x declares >=3.14.0, so on 3.13 pip
+          # silently FILTERS OUT every matching release and then reports "no
+          # matching distribution" for a version that plainly exists -- which
+          # reads as a bad pin rather than a wrong interpreter.
+          python-version: "3.14"
+
+      # Pinned to the floor hacs.json declares, not to latest: this asserts
+      # the integration imports on the OLDEST core it claims to support. A
+      # newer core that also works is not what the claim says.
+      - name: install the core version hacs.json claims support for
         run: |
           set -euo pipefail
-          if [[ -f manifest.json ]]; then
-            echo "::error::manifest.json exists, so this is now a real integration --"
-            echo "::error::add the hassfest, imports and hacs jobs from jrackerby/navimow's"
-            echo "::error::validate.yml and delete this job."
-            exit 1
-          fi
-          echo "resolver-only: no manifest.json, so hassfest/imports/hacs correctly do not run"
-          # A sweep that does not assert its own completeness is not evidence
-          # A sweep that cannot assert its own completeness is not evidence,
-          # and an empty checkout would satisfy the check above.
-          COUNT=$(ls ./*.py | wc -l)
-          echo "python modules at root: $COUNT"
-          test "$COUNT" -ge 2 \
-            || { echo "::error::only $COUNT module(s) at root -- the check above passed over an empty tree"; exit 1; }
+          FLOOR="$(python -c 'import json;print(json.load(open("hacs.json"))["homeassistant"])')"
+          echo "hacs.json floor: $FLOOR"
+          pip install "homeassistant==$FLOOR"
+
+      # Derived from manifest.json, never listed here -- a second copy of
+      # this set in a workflow file is a copy that goes stale silently.
+      - name: install the requirements manifest.json declares
+        run: |
+          set -euo pipefail
+          REQS="$(python -c 'import json;print("\n".join(json.load(open("manifest.json")).get("requirements", [])))')"
+          echo "manifest requirements:"; echo "$REQS"
+          test -n "$REQS" || { echo "CANNOT RUN: manifest declares no requirements, but this component needs deebot-client -- the parse, not the manifest, is probably wrong"; exit 1; }
+          echo "$REQS" | xargs -r pip install
+
+      - name: import every module against real core
+        run: |
+          set -euo pipefail
+          mkdir -p "stage/custom_components/$DOMAIN"
+          cp -a ./*.py "stage/custom_components/$DOMAIN/"
+          cp -a manifest.json translations strings.json "stage/custom_components/$DOMAIN/"
+          touch stage/custom_components/__init__.py
+          cd stage
+          MODULES=$(cd "custom_components/$DOMAIN" && ls ./*.py | sed 's#^\./##;s/\.py$//' | grep -v '^__init__$')
+          echo "modules: $MODULES"
+          test -n "$MODULES" \
+            || { echo "CANNOT RUN: no modules staged -- this would pass vacuously"; exit 1; }
+          python - <<PY
+          import importlib, sys
+          sys.path.insert(0, ".")
+          mods = """$MODULES""".split()
+          failed = []
+          for m in ["__init__", *mods]:
+              name = f"custom_components.$DOMAIN.{m}" if m != "__init__" else "custom_components.$DOMAIN"
+              try:
+                  importlib.import_module(name)
+                  print(f"  ok   {name}")
+              except Exception as exc:
+                  failed.append((name, exc))
+                  print(f"  FAIL {name}: {type(exc).__name__}: {exc}")
+          if failed:
+              sys.exit(f"{len(failed)} module(s) failed to import against real core")
+          print(f"imported {len(mods) + 1} modules cleanly")
+          PY
+
+      # THE SEED IS A DEPENDENCY ON A PRIVATE-ISH CORNER OF deebot-client,
+      # and the per-model tables are the part of that library that moves. If
+      # the borrowed class is ever dropped, this integration has no
+      # Capabilities object to build a protocol client from -- so the failure
+      # must be a red build here, not a robot that quietly stops having
+      # entities after a core upgrade bumps the library.
+      - name: the seed class deebot-client is asked for still exists
+        run: |
+          set -euo pipefail
+          cd stage
+          python - <<PY
+          import asyncio, sys
+          sys.path.insert(0, ".")
+          from custom_components.$DOMAIN.seed import SEED_CLASS, load_seed
+          static = asyncio.run(load_seed())
+          caps = static.capabilities
+          print(f"seed class {SEED_CLASS} resolved: device_type={caps.device_type}")
+          # Not just present: usable. These are the attributes the platforms
+          # navigate, and a table that resolved but had lost one of them
+          # would fail later, on the live host, as a missing entity.
+          for attribute in ("battery", "state", "clean", "settings", "life_span", "stats"):
+              if getattr(caps, attribute, None) is None:
+                  sys.exit(f"seed capabilities carry no {attribute!r}")
+          print("seed capabilities carry every attribute the platforms navigate")
+          PY
+
+  hacs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # VOID -- NOT A PASS, AND NOT A FAILURE OF THIS REPO. HACS fetches
+      # hacs.json and manifest.json from raw.githubusercontent.com with NO
+      # Authorization header, in CI and in a live install alike, so a private
+      # repository 404s. Reporting it VOID keeps the distinction that
+      # matters: the check did not run, so nothing was proven either way.
+      - name: VOID -- HACS validation cannot run against a private repository
+        if: ${{ github.event.repository.private }}
+        run: |
+          echo "::notice title=HACS validation VOID::this repository is private, so HACS cannot read it"
+          echo "This is a VOID, not a pass."
+
+      # `brands` stays ignored: it needs either brand/icon.png committed here
+      # or an accepted PR against home-assistant/brands, and neither exists
+      # yet. `topics` and `license` are NOT ignored -- they are repository
+      # metadata this repo satisfies, and ignoring a check that would pass is
+      # how a gate quietly stops being one.
+      - uses: hacs/action@main
+        if: ${{ !github.event.repository.private }}
+        with:
+          category: integration
+          ignore: brands
