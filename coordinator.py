@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+import ssl
 from typing import TYPE_CHECKING, Any
 
 from deebot_client.api_client import ApiClient
@@ -91,14 +92,31 @@ def _restore(raw: Any) -> dict[str, CapabilityState]:
         except (KeyError, TypeError, ValueError):
             LOGGER.debug("Dropping unreadable stored capability row %s: %s", key, value)
             continue
-        states[key] = CapabilityState(support, misses)
+        # Absent on a row written before this field existed, and unreadable if
+        # the vocabulary moved. Neither costs anything: it is a record of the
+        # last reading, so losing it means one pass with less to say.
+        try:
+            outcome = (
+                ProbeOutcome(value["last_outcome"])
+                if value.get("last_outcome") is not None
+                else None
+            )
+        except ValueError:
+            outcome = None
+        states[key] = CapabilityState(support, misses, outcome)
     return states
 
 
 def _dump(states: Mapping[str, CapabilityState]) -> dict[str, Any]:
     return {
         "capabilities": {
-            key: {"support": state.support.value, "misses": state.misses}
+            key: {
+                "support": state.support.value,
+                "misses": state.misses,
+                "last_outcome": (
+                    state.last_outcome.value if state.last_outcome else None
+                ),
+            }
             for key, state in sorted(states.items())
         }
     }
@@ -135,7 +153,16 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
         # parts, and the seeded query deliberately asks about more components
         # than any one robot has. The reply names the real ones, so the
         # sensors are built from what arrived rather than from what was asked.
-        self._life_span_components: set[LifeSpan] = set()
+        #
+        # THE EVENT IS KEPT, NOT JUST THE NAME, and that is the whole fix for
+        # a defect that shipped: deebot-client's event bus replays only the
+        # LAST event of each TYPE to a new subscriber, and every component
+        # shares the one LifeSpanEvent type. A sensor is created when its
+        # component's event arrives, subscribes a moment later, and is handed
+        # whichever component was most recent by then -- which it correctly
+        # filters out, and then sits at `unknown` until that component is
+        # reported again. Measured live: 12 of 13 sensors empty.
+        self._life_span: dict[LifeSpan, LifeSpanEvent] = {}
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -213,8 +240,19 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
         static = await load_seed()
         device = Device(DeviceInfo(api_info, static), authenticator)
 
+        # THE SSL CONTEXT IS BUILT IN THE EXECUTOR, and it has to be.
+        # `create_mqtt_config` builds one inline when it is not given one, and
+        # constructing a default context reads the system CA bundle off disk
+        # -- blocking file I/O. Home Assistant detects that inside the event
+        # loop and logs a warning naming this integration and this line, which
+        # is exactly how this was found: it is not cosmetic, it stalls the
+        # loop for every other integration while the certificates load.
+        ssl_context = await self.hass.async_add_executor_job(ssl.create_default_context)
         mqtt = MqttClient(
-            create_mqtt_config(device_id=device_id, country=country), authenticator
+            create_mqtt_config(
+                device_id=device_id, country=country, ssl_context=ssl_context
+            ),
+            authenticator,
         )
         try:
             await device.initialize(mqtt)
@@ -260,18 +298,31 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
         self.async_update_listeners()
 
     async def _on_life_span(self, event: LifeSpanEvent) -> None:
-        if event.type in self._life_span_components:
-            return
-        self._life_span_components.add(event.type)
-        # The platforms add entities on a coordinator update, and this is one
-        # in every sense that matters: something became buildable that was
-        # not buildable a moment ago.
-        self.async_update_listeners()
+        first_time = event.type not in self._life_span
+        self._life_span[event.type] = event
+        if first_time:
+            # The platforms add entities on a coordinator update, and this is
+            # one in every sense that matters: something became buildable that
+            # was not buildable a moment ago.
+            self.async_update_listeners()
 
     @property
     def life_span_components(self) -> frozenset[LifeSpan]:
         """The consumables this robot has actually reported."""
-        return frozenset(self._life_span_components)
+        return frozenset(self._life_span)
+
+    @property
+    def life_span_events(self) -> Mapping[str, LifeSpanEvent]:
+        """The latest reading per consumable, keyed as the entities key them.
+
+        A sensor added after its own event has already been dispatched reads
+        its value from here rather than waiting for the component to be
+        reported again.
+        """
+        return {
+            component.name.lower(): event
+            for component, event in self._life_span.items()
+        }
 
     @callback
     def _log_condition(self, token: str, message: str) -> None:

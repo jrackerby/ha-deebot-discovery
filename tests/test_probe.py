@@ -178,6 +178,41 @@ def case_every_outcome_is_classified():
     }
 
 
+def case_ok_and_unparsed_are_recorded_apart():
+    # THE POINT OF `last_outcome`. Both are SUPPORTED and they say different
+    # things to whoever is reading the map: one capability works, the other
+    # answered and our reader could not read it -- so its entity is real and
+    # empty, which is indistinguishable from a bug unless the map says so.
+    ok = run({}, {"battery": OK, "station": OK})
+    unparsed = run({}, {"battery": OK, "station": UNPARSED})
+    return {
+        "ok": ok.states["station"].last_outcome,
+        "unparsed": unparsed.states["station"].last_outcome,
+        "same_support": ok.states["station"].support is unparsed.states["station"].support,
+    }
+
+
+def case_a_miss_records_itself():
+    r = run({"battery": State(SUPPORTED, 0), "station": State(SUPPORTED, 0)},
+            {"battery": OK, "station": NO_RESPONSE})
+    return {"station": r.states["station"].last_outcome}
+
+
+def case_inconclusive_does_not_overwrite_the_last_reading():
+    # Rule 4 reaches this field too. An unclassified error is not evidence
+    # about the capability, so letting it overwrite the last real reading
+    # would destroy the one record of how the belief was reached.
+    s = run({}, {"battery": OK, "station": UNPARSED}).states
+    r = run(s, {"battery": OK, "station": INCONCLUSIVE})
+    return {"station": r.states["station"].last_outcome}
+
+
+def case_a_void_pass_records_no_outcome():
+    prev = {"battery": State(SUPPORTED, 0), "station": State(SUPPORTED, 0, OK)}
+    r = run(prev, {"battery": NO_RESPONSE, "station": UNPARSED})
+    return {"void": r.void, "station": r.states["station"].last_outcome}
+
+
 def case_seed_orders_but_never_believes():
     known = {"station": State(UNKNOWN, 0), "map": State(UNKNOWN, 0), "battery": State(SUPPORTED, 0)}
     order = probe.seed_order(known, hypothesis={"map"}, candidates=["station", "map", "battery"])
@@ -222,6 +257,13 @@ CASES = [
      {"void": True, "station": SUPPORTED, "misses": 0}),
     ("ten inconclusive passes demote nothing",
      case_ten_inconclusive_passes_demote_nothing, {"station": SUPPORTED, "misses": 0}),
+    ("ok and unparsed are recorded apart", case_ok_and_unparsed_are_recorded_apart,
+     {"ok": OK, "unparsed": UNPARSED, "same_support": True}),
+    ("a miss records itself", case_a_miss_records_itself, {"station": NO_RESPONSE}),
+    ("an inconclusive answer does not overwrite the last reading",
+     case_inconclusive_does_not_overwrite_the_last_reading, {"station": UNPARSED}),
+    ("a void pass records no outcome", case_a_void_pass_records_no_outcome,
+     {"void": True, "station": OK}),
     ("every outcome is classified exactly once", case_every_outcome_is_classified,
      {"overlap": [], "proves": ["ok", "unparsed"], "no_evidence": ["inconclusive"],
       "counted_as_miss": ["no_response", "offline"]}),
@@ -238,6 +280,9 @@ FAIL_CASES = [
     ("self-test: inconclusive must not invent a key", case_inconclusive_creates_no_state, {"present": True}),
     ("self-test: an inconclusive control must not be admissible", case_inconclusive_control_voids_the_pass, {"void": False}),
     ("self-test: no outcome may be both proof and no-evidence", case_every_outcome_is_classified, {"overlap": ["ok"]}),
+    ("self-test: unparsed must not be recorded as ok", case_ok_and_unparsed_are_recorded_apart, {"unparsed": OK}),
+    ("self-test: inconclusive must not overwrite the last reading", case_inconclusive_does_not_overwrite_the_last_reading, {"station": INCONCLUSIVE}),
+    ("self-test: a void pass must not record an outcome", case_a_void_pass_records_no_outcome, {"station": UNPARSED}),
 ]
 
 

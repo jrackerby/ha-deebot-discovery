@@ -245,8 +245,25 @@ class DeebotSensor(DeebotEntity, SensorEntity):
         if description.key.startswith("life_span_"):
             self._component = description.key.removeprefix("life_span_")
 
+    def _apply(self, event: Any) -> None:
+        description = self.entity_description
+        self._attr_native_value = description.value_fn(event)
+        if description.attributes_fn is not None:
+            self._attr_extra_state_attributes = description.attributes_fn(event)
+
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+
+        # SEEDED FROM THE COORDINATOR'S CACHE FIRST. The event bus replays
+        # only the last event of each TYPE, and every consumable shares one
+        # LifeSpanEvent type -- so this sensor was created by its own
+        # component's event and then handed somebody else's on subscribe.
+        # Without this it reads `unknown` until that component is reported
+        # again, which measured live as 12 of 13 sensors empty.
+        if self._component is not None:
+            cached = self.coordinator.life_span_events.get(self._component)
+            if cached is not None:
+                self._apply(cached)
 
         async def _on_event(event: Any) -> None:
             # A life-span event names ONE component, and every life-span
@@ -255,10 +272,7 @@ class DeebotSensor(DeebotEntity, SensorEntity):
             # would all read plausibly and all be wrong.
             if self._component is not None and event.type.name.lower() != self._component:
                 return
-            description = self.entity_description
-            self._attr_native_value = description.value_fn(event)
-            if description.attributes_fn is not None:
-                self._attr_extra_state_attributes = description.attributes_fn(event)
+            self._apply(event)
             self.async_write_ha_state()
 
         self._subscribe(self.entity_description.event_type, _on_event)
