@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="brand/dark_icon.png">
+  <img src="brand/icon.png" alt="" width="96" align="right">
+</picture>
+
 # Deebot Discovery
 
 A Home Assistant integration for Ecovacs Deebot robots that **discovers** what
@@ -200,6 +205,35 @@ fail is not evidence.
 What the suites do **not** prove is that any of it runs: that is the CI
 `imports` job, which installs real Home Assistant and real deebot-client and
 imports every module against them.
+
+## Branding
+
+The mark in `brand/` is served by Home Assistant itself, not by the brands CDN.
+Since core 2026.3 a custom integration ships its own brand images: the loader
+treats a top-level `brand/` directory as branding, and
+`/api/brands/integration/deebot_estate/icon.png` returns those bytes directly,
+falling through to the CDN only if the file is absent. The
+`custom_integrations/` folder of `home-assistant/brands` is the legacy path for
+this and no pull request against it is needed.
+
+Four files, and no `logo.png`: the mark is square, so the brands specification
+says to ship the icon alone and core's own fallback chain resolves `logo.png`
+to `icon.png`. The `dark_` pair is not cosmetic — the mark's navy against a
+dark card is a near-invisible smudge, so the dark variant lifts value while
+holding hue.
+
+| URL | File |
+| --- | --- |
+| `/api/brands/integration/deebot_estate/icon.png` | `brand/icon.png` (256×256) |
+| `/api/brands/integration/deebot_estate/icon@2x.png` | `brand/icon@2x.png` (512×512) |
+| `/api/brands/integration/deebot_estate/dark_icon.png` | `brand/dark_icon.png` (256×256) |
+| `/api/brands/integration/deebot_estate/dark_icon@2x.png` | `brand/dark_icon@2x.png` (512×512) |
+
+Those URLs are what an external dashboard should reference for a tile; they
+need a bearer token like any other API path. `tests/test_brand.py` holds the
+files to the specification, because nothing in either serving path validates
+them — a non-square icon or one that kept its white matte is served exactly as
+committed.
 
 ## Layout
 

@@ -29,9 +29,7 @@ rules:
       different thing -- it is what lets a firmware update add a function and
       be seen, and what accumulates the consecutive misses a demotion needs.
       One pass is about one cloud call per probed capability.
-  brands:
-    status: todo
-    comment: No accepted PR against home-assistant/brands for this domain.
+  brands: done
   common-modules:
     status: done
     comment: coordinator.py and entity.py, plus the pure layer they sit on.

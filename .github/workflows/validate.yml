@@ -240,13 +240,16 @@ jobs:
           echo "::notice title=HACS validation VOID::this repository is private, so HACS cannot read it"
           echo "This is a VOID, not a pass."
 
-      # `brands` stays ignored: it needs either brand/icon.png committed here
-      # or an accepted PR against home-assistant/brands, and neither exists
-      # yet. `topics` and `license` are NOT ignored -- they are repository
-      # metadata this repo satisfies, and ignoring a check that would pass is
-      # how a gate quietly stops being one.
+      # NOTHING IS IGNORED. `brands` used to be, on the reasoning that it
+      # needed an accepted PR against home-assistant/brands -- that reasoning
+      # is now wrong twice over. HACS's own validator resolves the asset to
+      # `brand/icon.png` when `content_in_root` is set (which hacs.json sets)
+      # and returns clean the moment that file is in the tree; and since core
+      # 2026.3 the `custom_integrations` folder of home-assistant/brands is
+      # legacy, because a custom integration serves its own `brand/` directory
+      # through the brands proxy. Both now hold, so the ignore comes off:
+      # ignoring a check that would pass is how a gate quietly stops being one.
       - uses: hacs/action@main
         if: ${{ !github.event.repository.private }}
         with:
           category: integration
-          ignore: brands
