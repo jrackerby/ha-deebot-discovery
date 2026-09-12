@@ -1,0 +1,42 @@
+name: Robot report
+description: Tell us what this integration discovered on your robot — the good and the missing.
+title: "[robot] "
+labels: ["robot-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The integration infers support from what the robot answers, so a report from a robot it has not met is how the probe order improves. Two things carry most of the value: the class string and the diagnostics download.
+  - type: input
+    id: model
+    attributes:
+      label: Robot model
+      placeholder: DEEBOT T90 PRO OMNI Care
+    validations:
+      required: true
+  - type: input
+    id: class
+    attributes:
+      label: Class string
+      description: In the Home Assistant log, the line `Device class "xxxxxx" not recognized` — or the device page, which shows it under the model.
+      placeholder: nv8fz5
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics download
+      description: Device page → three dots → **Download diagnostics**. Drag the file in. It lists every capability with what was measured, whether it was probed or inferred, and its miss count; credentials are redacted.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What is missing or wrong
+      description: Entities you expected and did not get, entities that raise when used, or ones that read unavailable. Leave empty if everything works — that is worth knowing too.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Integration version (HACS shows it) and Home Assistant version.
+      placeholder: 1.2.0 / 2026.9.2

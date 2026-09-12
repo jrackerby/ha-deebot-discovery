@@ -20,7 +20,7 @@ import sys
 import types
 
 #: tests/ sits directly under the component root in both layouts: this repo
-#: standing alone, and this repo installed as custom_components/deebot_estate.
+#: standing alone, and this repo installed as custom_components/deebot_discovery.
 #: One expression covers both.
 PKG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -33,15 +33,15 @@ def load(*names):
     neither Home Assistant nor deebot-client installed -- which is the whole
     reason the pure layer exists.
     """
-    pkg = sys.modules.get("deebot_estate")
+    pkg = sys.modules.get("deebot_discovery")
     if pkg is None:
-        pkg = types.ModuleType("deebot_estate")
+        pkg = types.ModuleType("deebot_discovery")
         pkg.__path__ = [PKG_DIR]
-        sys.modules["deebot_estate"] = pkg
+        sys.modules["deebot_discovery"] = pkg
 
     loaded = []
     for name in names:
-        full = f"deebot_estate.{name}"
+        full = f"deebot_discovery.{name}"
         if full not in sys.modules:
             spec = importlib.util.spec_from_file_location(
                 full, os.path.join(PKG_DIR, f"{name}.py")

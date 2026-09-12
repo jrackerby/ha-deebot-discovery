@@ -618,8 +618,8 @@ FAIL_CASES = [
         _broken_case(
             check_manifest_agrees_with_the_code,
             "manifest.json",
-            '"domain": "deebot_estate"',
             '"domain": "deebot_discovery"',
+            '"domain": "deebot_estate"',
         ),
         {"findings": []},
     ),
