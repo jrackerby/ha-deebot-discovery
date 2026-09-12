@@ -1,4 +1,4 @@
-"""Constants for deebot_estate.
+"""Constants for deebot_discovery.
 
 This integration exists because `deebot-client` resolves a robot's
 capabilities from a per-model lookup table keyed on an opaque class string,
@@ -22,7 +22,7 @@ import logging
 from enum import StrEnum
 from typing import Final
 
-DOMAIN: Final = "deebot_estate"
+DOMAIN: Final = "deebot_discovery"
 
 #: `logging` is the standard library, so this module's no-HA/no-vendor
 #: contract is intact and the suite still loads it on a plain python3.

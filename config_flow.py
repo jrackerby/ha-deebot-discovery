@@ -73,7 +73,7 @@ _VERIFICATION_SCHEMA = vol.Schema({vol.Required(CONF_VERIFICATION_CODE): str})
 
 
 class DeebotConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for deebot_estate."""
+    """Handle a config flow for deebot_discovery."""
 
     VERSION = 1
 

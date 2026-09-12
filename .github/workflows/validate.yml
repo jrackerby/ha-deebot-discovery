@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 
 env:
-  DOMAIN: deebot_estate
+  DOMAIN: deebot_discovery
 
 permissions:
   contents: read
@@ -37,7 +37,7 @@ jobs:
       # home-assistant/actions/hassfest takes no path input: it scans
       # custom_components/* under the workspace. This repo keeps the
       # integration at its ROOT (hacs.json content_in_root) because that is
-      # the layout HACS installs from, as custom_components/deebot_estate.
+      # the layout HACS installs from, as custom_components/deebot_discovery.
       - name: stage the custom_components layout hassfest scans
         run: |
           set -euo pipefail

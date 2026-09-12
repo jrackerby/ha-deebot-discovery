@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: deebot-client (the protocol library)
+    url: https://github.com/DeebotUniverse/client.py/issues
+    about: A robot class that should be added upstream, or a command the library parses wrongly, belongs there.

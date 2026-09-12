@@ -5,8 +5,17 @@
 
 # Deebot Discovery
 
+[![HACS custom repository](https://img.shields.io/badge/HACS-custom%20repository-41BDF5?logo=homeassistant&logoColor=white)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jrackerby&repository=ha-deebot-discovery&category=integration)
+[![validate](https://github.com/jrackerby/ha-deebot-discovery/actions/workflows/validate.yml/badge.svg)](https://github.com/jrackerby/ha-deebot-discovery/actions/workflows/validate.yml)
+[![release](https://img.shields.io/github/v/release/jrackerby/ha-deebot-discovery?sort=semver)](https://github.com/jrackerby/ha-deebot-discovery/releases)
+[![license](https://img.shields.io/github/license/jrackerby/ha-deebot-discovery)](LICENSE)
+
 A Home Assistant integration for Ecovacs Deebot robots that **discovers** what
 a robot supports instead of looking it up in a table.
+
+If Home Assistant's built-in Ecovacs integration logs `Device "..." not
+supported` for your robot and gives it no entities, this is the integration
+for that robot.
 
 ## Why it exists
 
@@ -83,6 +92,17 @@ Any Ecovacs robot reachable through the Ecovacs cloud, whether or not
 deebot-client recognises its class. The case it was built for is the one it
 handles that nothing else does: a class with **no** hardware table.
 
+Measured so far:
+
+| Robot | Class | Result |
+| --- | --- | --- |
+| DEEBOT T90 PRO OMNI Care | `nv8fz5` | Every function listed below. |
+
+If you run it on another robot, [open a robot report](https://github.com/jrackerby/ha-deebot-discovery/issues/new?template=robot-report.yml)
+with the class string and a diagnostics download. That is how the table above
+grows, and it is the only way a robot with fewer or more functions than the
+seed's probe order gets its order tuned.
+
 The protocol client is built from a sibling class's table — `rx6f4s`, one of
 four *DEEBOT T90 PRO OMNI* classes whose modules are byte-identical in
 deebot-client 18.5.1. That table supplies the object the library needs to talk
@@ -104,11 +124,21 @@ whole point: **degrade to fewer features rather than to none.**
 
 ## Installation
 
-HACS → three-dot menu → **Custom repositories** → add
-`https://github.com/jrackerby/ha-deebot-discovery` as an **Integration**, then
+Requires Home Assistant **2026.9.0** or newer and [HACS](https://hacs.xyz).
+
+[![Open your Home Assistant instance and add this repository to HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jrackerby&repository=ha-deebot-discovery&category=integration)
+
+Or by hand: HACS → three-dot menu → **Custom repositories** → add
+`https://github.com/jrackerby/ha-deebot-discovery` as an **Integration**. Then
 install it and restart Home Assistant.
 
-Then **Settings → Devices & Services → Add Integration → Deebot Discovery**.
+[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=deebot_discovery)
+
+Or **Settings → Devices & Services → Add Integration → Deebot Discovery**.
+
+It can run beside the built-in `ecovacs` integration on the same account: both
+use `deebot-client`, which is why this integration declares a version *floor*
+for that library rather than a pin — a pin would fight core's own.
 
 ### What it asks for
 
@@ -162,6 +192,13 @@ the map, which costs one probe pass, not a reinstall.
 - **The seed is a dependency on a corner of deebot-client that moves.** If the
   sibling class is ever dropped from the library, setup fails loudly with a
   message saying so. CI checks it on every run.
+- **One warning at setup is known and deliberate.** Home Assistant logs
+  `Detected blocking call to load_default_certs ... by custom integration
+  'deebot_discovery'` once per setup. deebot-client builds its MQTT TLS context
+  inline; building it off-loop here meant restating the library's TLS policy,
+  and doing that took push down for hours. Tracked in
+  [#14](https://github.com/jrackerby/ha-deebot-discovery/issues/14); it needs
+  an upstream change, not a report here.
 
 ## Troubleshooting
 
@@ -211,7 +248,7 @@ imports every module against them.
 The mark in `brand/` is served by Home Assistant itself, not by the brands CDN.
 Since core 2026.3 a custom integration ships its own brand images: the loader
 treats a top-level `brand/` directory as branding, and
-`/api/brands/integration/deebot_estate/icon.png` returns those bytes directly,
+`/api/brands/integration/deebot_discovery/icon.png` returns those bytes directly,
 falling through to the CDN only if the file is absent. The
 `custom_integrations/` folder of `home-assistant/brands` is the legacy path for
 this and no pull request against it is needed.
@@ -224,12 +261,12 @@ holding hue.
 
 | URL | File |
 | --- | --- |
-| `/api/brands/integration/deebot_estate/icon.png` | `brand/icon.png` (256×256) |
-| `/api/brands/integration/deebot_estate/icon@2x.png` | `brand/icon@2x.png` (512×512) |
-| `/api/brands/integration/deebot_estate/dark_icon.png` | `brand/dark_icon.png` (256×256) |
-| `/api/brands/integration/deebot_estate/dark_icon@2x.png` | `brand/dark_icon@2x.png` (512×512) |
+| `/api/brands/integration/deebot_discovery/icon.png` | `brand/icon.png` (256×256) |
+| `/api/brands/integration/deebot_discovery/icon@2x.png` | `brand/icon@2x.png` (512×512) |
+| `/api/brands/integration/deebot_discovery/dark_icon.png` | `brand/dark_icon.png` (256×256) |
+| `/api/brands/integration/deebot_discovery/dark_icon@2x.png` | `brand/dark_icon@2x.png` (512×512) |
 
-Those URLs are what an external dashboard should reference for a tile; they
+Those URLs are what a dashboard outside Home Assistant should reference; they
 need a bearer token like any other API path. `tests/test_brand.py` holds the
 files to the specification, because nothing in either serving path validates
 them — a non-square icon or one that kept its white matte is served exactly as
@@ -239,7 +276,19 @@ committed.
 
 The integration's modules sit at the repository root rather than under
 `custom_components/`, which is the layout HACS installs from — `hacs.json`
-declares `content_in_root`. CI stages the `custom_components/deebot_estate/`
+declares `content_in_root`. CI stages the `custom_components/deebot_discovery/`
 layout that hassfest expects.
 
-The domain is `deebot_estate`.
+The domain is `deebot_discovery`. It was `deebot_estate` before the first
+release; nothing installed from a release ever carried the old name.
+
+## Contributing
+
+Robot reports are the most useful contribution — see *Supported devices*. For
+code, run `./tools/run_tests.sh` before opening a pull request; CI runs the
+same suites plus hassfest, HACS validation and an import of every module
+against the oldest Home Assistant `hacs.json` claims.
+
+## License
+
+[MIT](LICENSE).
