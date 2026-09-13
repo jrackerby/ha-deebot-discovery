@@ -192,13 +192,13 @@ the map, which costs one probe pass, not a reinstall.
 - **The seed is a dependency on a corner of deebot-client that moves.** If the
   sibling class is ever dropped from the library, setup fails loudly with a
   message saying so. CI checks it on every run.
-- **One warning at setup is known and deliberate.** Home Assistant logs
-  `Detected blocking call to load_default_certs ... by custom integration
-  'deebot_discovery'` once per setup. deebot-client builds its MQTT TLS context
-  inline; building it off-loop here meant restating the library's TLS policy,
-  and doing that took push down for hours. Tracked in
-  [#14](https://github.com/jrackerby/ha-deebot-discovery/issues/14); it needs
-  an upstream change, not a report here.
+- **The MQTT TLS policy is the library's, not this integration's.**
+  deebot-client connects to the Ecovacs broker with certificate verification
+  and hostname checking off, because the broker's certificate does not
+  validate. This integration never passes an SSL context, so it never restates
+  that decision — it calls the library's own factory on a worker thread, which
+  keeps the CA-bundle read off the event loop without changing what the
+  library does with the context afterwards.
 
 ## Troubleshooting
 

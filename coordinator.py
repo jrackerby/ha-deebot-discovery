@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from deebot_client.api_client import ApiClient
@@ -239,13 +240,10 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
         static = await load_seed()
         device = Device(DeviceInfo(api_info, static), authenticator)
 
-        # NO `ssl_context` ARGUMENT, DELIBERATELY, AND THIS COST AN OUTAGE.
-        #
-        # An earlier pass passed one, to keep the context build off the event
-        # loop: `create_mqtt_config` builds it inline otherwise, and reading
-        # the CA bundle is blocking I/O that Home Assistant detects and warns
-        # about by name. That change was right about the warning and wrong
-        # about everything else.
+        # STILL NO `ssl_context` ARGUMENT, DELIBERATELY, AND THIS COST AN
+        # OUTAGE. An earlier pass passed one, to keep the context build off
+        # the event loop. That change was right about the warning and wrong
+        # about the lever.
         #
         # The library's default branch does not just build a context. It also
         # turns OFF hostname checking and certificate verification, because
@@ -260,13 +258,24 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
         # was dead. Stale is not the same as wrong, and a health read cannot
         # tell them apart.
         #
-        # So the argument is gone and the blocking-call warning is accepted.
-        # Reproducing the library's TLS settings here would fix both, but it
-        # means writing the disabling lines into this repo, and that belongs
-        # upstream -- deebot-client should build its own context off-loop.
-        mqtt = MqttClient(
-            create_mqtt_config(device_id=device_id, country=country), authenticator
+        # WHAT MOVES INSTEAD IS THE CALL SITE. `create_mqtt_config` is wholly
+        # synchronous, and the only expensive thing in it is the context
+        # build: `ssl.create_default_context()` reads the system CA bundle off
+        # disk, which is blocking I/O that Home Assistant detects and names.
+        # Running the library's own factory in the executor puts that read on
+        # a worker thread and leaves every decision it makes -- which branch,
+        # which hostname, what it does to the context afterwards -- exactly
+        # where it was. This integration still states no TLS policy of its
+        # own, which is the whole reason the `ssl_context` argument is not
+        # coming back.
+        #
+        # `partial`, not a call: `async_add_executor_job(create_mqtt_config(...))`
+        # would evaluate the config on the loop and hand the executor a value.
+        # tests/test_wiring.py asserts the difference.
+        mqtt_config = await self.hass.async_add_executor_job(
+            partial(create_mqtt_config, device_id=device_id, country=country)
         )
+        mqtt = MqttClient(mqtt_config, authenticator)
         try:
             await device.initialize(mqtt)
         except DeebotError as err:
