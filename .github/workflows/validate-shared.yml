@@ -1,0 +1,179 @@
+name: validate-shared
+
+# Same posture as the rest of the fleet: a repo that only validates on push
+# goes quietly stale between commits, and this one sits untouched for months
+# between robots doing something new.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: "0 7 * * 3"
+  workflow_dispatch:
+
+env:
+  DOMAIN: deebot_discovery
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # hassfest, hacs and the shared tests/imports jobs run in
+  # jrackerby/gha-workflows validate-integration.yml (workflow_call);
+  # master's required contexts are "validate / <job>" (jrackerby/HA#821).
+  validate:
+    uses: jrackerby/gha-workflows/.github/workflows/validate-integration.yml@master
+    with:
+      domain: "deebot_discovery"
+      public: true
+      test-requirements: ""
+      run-imports: false
+
+  imports:
+    # The gate the static suites cannot be: every module except the pure four
+    # imports `homeassistant`, and seed.py imports `deebot_client`, so a
+    # symbol that moved or was removed is invisible to them and would first
+    # show up as the component failing to set up on the live host after a
+    # restart. hassfest does not catch it either -- it validates the manifest
+    # and the translations, never an import.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # 3.14, NOT 3.13. Home Assistant 2026.x declares Requires-Python
+          # >=3.14.2 and deebot-client 18.x declares >=3.14.0, so on 3.13 pip
+          # silently FILTERS OUT every matching release and then reports "no
+          # matching distribution" for a version that plainly exists -- which
+          # reads as a bad pin rather than a wrong interpreter.
+          python-version: "3.14"
+
+      # Pinned to the floor hacs.json declares, not to latest: this asserts
+      # the integration imports on the OLDEST core it claims to support. A
+      # newer core that also works is not what the claim says.
+      - name: install the core version hacs.json claims support for
+        run: |
+          set -euo pipefail
+          FLOOR="$(python -c 'import json;print(json.load(open("hacs.json"))["homeassistant"])')"
+          echo "hacs.json floor: $FLOOR"
+          pip install "homeassistant==$FLOOR"
+
+      # Derived from manifest.json, never listed here -- a second copy of
+      # this set in a workflow file is a copy that goes stale silently.
+      - name: install the requirements manifest.json declares
+        run: |
+          set -euo pipefail
+          REQS="$(python -c 'import json;print("\n".join(json.load(open("manifest.json")).get("requirements", [])))')"
+          echo "manifest requirements:"; echo "$REQS"
+          test -n "$REQS" || { echo "CANNOT RUN: manifest declares no requirements, but this component needs deebot-client -- the parse, not the manifest, is probably wrong"; exit 1; }
+          echo "$REQS" | xargs -r pip install
+
+      - name: import every module against real core
+        run: |
+          set -euo pipefail
+          mkdir -p "stage/custom_components/$DOMAIN"
+          cp -a ./*.py "stage/custom_components/$DOMAIN/"
+          cp -a manifest.json translations strings.json "stage/custom_components/$DOMAIN/"
+          touch stage/custom_components/__init__.py
+          cd stage
+          MODULES=$(cd "custom_components/$DOMAIN" && ls ./*.py | sed 's#^\./##;s/\.py$//' | grep -v '^__init__$')
+          echo "modules: $MODULES"
+          test -n "$MODULES" \
+            || { echo "CANNOT RUN: no modules staged -- this would pass vacuously"; exit 1; }
+          python - <<PY
+          import importlib, sys
+          sys.path.insert(0, ".")
+          mods = """$MODULES""".split()
+          failed = []
+          for m in ["__init__", *mods]:
+              name = f"custom_components.$DOMAIN.{m}" if m != "__init__" else "custom_components.$DOMAIN"
+              try:
+                  importlib.import_module(name)
+                  print(f"  ok   {name}")
+              except Exception as exc:
+                  failed.append((name, exc))
+                  print(f"  FAIL {name}: {type(exc).__name__}: {exc}")
+          if failed:
+              sys.exit(f"{len(failed)} module(s) failed to import against real core")
+          print(f"imported {len(mods) + 1} modules cleanly")
+          PY
+
+      # THE SEED IS A DEPENDENCY ON A PRIVATE-ISH CORNER OF deebot-client,
+      # and the per-model tables are the part of that library that moves. If
+      # the borrowed class is ever dropped, this integration has no
+      # Capabilities object to build a protocol client from -- so the failure
+      # must be a red build here, not a robot that quietly stops having
+      # entities after a core upgrade bumps the library.
+      - name: the seed class deebot-client is asked for still exists
+        run: |
+          set -euo pipefail
+          cd stage
+          python - <<PY
+          import asyncio, sys
+          sys.path.insert(0, ".")
+          from custom_components.$DOMAIN.seed import SEED_CLASS, load_seed
+          static = asyncio.run(load_seed())
+          caps = static.capabilities
+          print(f"seed class {SEED_CLASS} resolved: device_type={caps.device_type}")
+          # Not just present: usable. These are the attributes the platforms
+          # navigate, and a table that resolved but had lost one of them
+          # would fail later, on the live host, as a missing entity.
+          for attribute in ("battery", "state", "clean", "settings", "life_span", "stats"):
+              if getattr(caps, attribute, None) is None:
+                  sys.exit(f"seed capabilities carry no {attribute!r}")
+          print("seed capabilities carry every attribute the platforms navigate")
+          PY
+
+  scope:
+    # THE NAME IS LOAD-BEARING. `scope` is one of only two REQUIRED status
+    # checks on master (the other is `tests`), and a required context is a
+    # FIXED list of job names: a job that is renamed or deleted never reports,
+    # so every open request wedges rather than failing. This job was deleted
+    # once, in the commit that added manifest.json, and the request that did
+    # it could not merge.
+    #
+    # WHAT IT ASSERTS IS NOW THE INVERSE OF WHAT IT USED TO. It was written to
+    # go red the moment a manifest.json appeared, because this repo held a
+    # resolver and no integration. That happened, so the assertion is turned
+    # around: the repo must now BE an installable integration, and -- the part
+    # that matters more -- the jobs that actually validate it must still
+    # exist. hassfest, imports and hacs are NOT required contexts, so any of
+    # them could be deleted and master would accept the change without
+    # comment. This job is where that gets noticed.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: assert this repo is an integration, and still validated as one
+        run: |
+          set -euo pipefail
+          MISSING=""
+          for f in manifest.json hacs.json strings.json translations/en.json; do
+            test -f "$f" || MISSING="$MISSING $f"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::this repo claims to be an installable integration but is missing:$MISSING"
+            exit 1
+          fi
+
+          # A sweep that cannot assert its own completeness is not evidence,
+          # and an empty checkout would satisfy every test above.
+          COUNT=$(ls ./*.py | wc -l)
+          echo "python modules at root: $COUNT"
+          test "$COUNT" -ge 10 \
+            || { echo "::error::only $COUNT module(s) at root -- the checks above passed over a tree that cannot be this integration"; exit 1; }
+
+          # The real gates. Only `tests` and `scope` are required contexts, so
+          # these three can be removed without master noticing. Here is where
+          # it notices.
+          for job in hassfest imports hacs; do
+            grep -qE "^  $job:" .github/workflows/validate.yml \
+              || { echo "::error::the '$job' job is gone from validate.yml, and it is not a required context -- nothing else would have caught this"; exit 1; }
+          done
+          echo "manifest present, and hassfest/imports/hacs all still declared"
