@@ -407,6 +407,29 @@ def check_the_password_is_hashed_before_it_is_sent(tree):
     return findings
 
 
+def _mqtt_config_sites(node):
+    """Every place below `node` that builds an MQTT configuration.
+
+    TWO FORMS EXIST AND A CHECK THAT READS ONLY ONE GOES VACUOUS. A direct
+    `create_mqtt_config(...)` call carries the library's keyword arguments;
+    so does `partial(create_mqtt_config, ...)` handed to an executor. The
+    first is the form that ran on the event loop, the second is the form that
+    replaced it, and both can carry an `ssl_context`. Yields
+    `(kind, call)` where kind is 'direct' or 'deferred'.
+    """
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call):
+            continue
+        called = getattr(child.func, "id", None) or getattr(child.func, "attr", None)
+        if called == "create_mqtt_config":
+            yield "direct", child
+        elif called == "partial" and child.args:
+            first = child.args[0]
+            inner = getattr(first, "id", None) or getattr(first, "attr", None)
+            if inner == "create_mqtt_config":
+                yield "deferred", child
+
+
 def check_the_mqtt_config_keeps_the_library_tls_settings(tree):
     """`create_mqtt_config` is handed no context, or a fully prepared one.
 
@@ -429,12 +452,9 @@ def check_the_mqtt_config_keeps_the_library_tls_settings(tree):
     findings = []
     for name, module in _modules(tree).items():
         calls = [
-            node
-            for node in ast.walk(module)
-            if isinstance(node, ast.Call)
-            and (getattr(node.func, "id", None) or getattr(node.func, "attr", None))
-            == "create_mqtt_config"
-            and _keyword(node, "ssl_context") is not None
+            call
+            for _kind, call in _mqtt_config_sites(module)
+            if _keyword(call, "ssl_context") is not None
         ]
         if not calls:
             continue
@@ -457,6 +477,55 @@ def check_the_mqtt_config_keeps_the_library_tls_settings(tree):
     return findings
 
 
+def check_the_mqtt_config_is_built_off_the_event_loop(tree):
+    """The config is built by the executor, never by the coroutine calling it.
+
+    `create_mqtt_config` builds its own SSL context, and
+    `ssl.create_default_context()` reads the CA bundle off disk. Called from a
+    coroutine that is blocking I/O on the event loop, which Home Assistant
+    detects and warns about by name -- and which stalls every other
+    integration for the duration of the read.
+
+    WHAT THE CHECK REFUSES IS NARROWER THAN 'CALL IT IN AN EXECUTOR', BECAUSE
+    THE NEAR MISS LOOKS IDENTICAL. `async_add_executor_job(create_mqtt_config(
+    ...))` evaluates the config on the loop and hands the executor a finished
+    value: the warning stays, the diff reads as a fix, and nothing goes red.
+    Only the deferred form -- the function passed, its arguments bound by
+    `partial` -- actually moves the read. So a direct call is a finding
+    wherever it appears, and a deferred one is a finding unless an
+    `async_add_executor_job` is what receives it.
+
+    Static because the alternative is asserting on a warning in someone
+    else's log.
+    """
+    findings = []
+    for name, module in _modules(tree).items():
+        submitted = set()
+        for node in ast.walk(module):
+            if not isinstance(node, ast.Call):
+                continue
+            called = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if called != "async_add_executor_job":
+                continue
+            submitted.update(
+                id(call) for kind, call in _mqtt_config_sites(node) if kind == "deferred"
+            )
+        for kind, call in _mqtt_config_sites(module):
+            if kind == "direct":
+                findings.append(
+                    f"{name}.py line {call.lineno}: create_mqtt_config is CALLED here, "
+                    "so its SSL context is built on the event loop -- pass the "
+                    "function to async_add_executor_job with partial instead"
+                )
+            elif id(call) not in submitted:
+                findings.append(
+                    f"{name}.py line {call.lineno}: partial(create_mqtt_config, ...) is "
+                    "built but nothing hands it to async_add_executor_job, so whatever "
+                    "calls it decides which loop the CA bundle is read on"
+                )
+    return findings
+
+
 CHECKS = (
     ("everything parses", check_everything_parses),
     ("the pure layer imports neither HA nor the vendor library", check_pure_layer_stays_pure),
@@ -470,6 +539,7 @@ CHECKS = (
     ("the manifest agrees with the code", check_manifest_agrees_with_the_code),
     ("the password is hashed before it is sent", check_the_password_is_hashed_before_it_is_sent),
     ("the mqtt config keeps the library's tls settings", check_the_mqtt_config_keeps_the_library_tls_settings),
+    ("the mqtt config is built off the event loop", check_the_mqtt_config_is_built_off_the_event_loop),
 )
 
 TREE = read_tree()
@@ -607,9 +677,29 @@ FAIL_CASES = [
         _broken_case(
             check_the_mqtt_config_keeps_the_library_tls_settings,
             "coordinator.py",
-            "create_mqtt_config(device_id=device_id, country=country), authenticator",
-            "create_mqtt_config(device_id=device_id, country=country, "
-            "ssl_context=ssl_context), authenticator",
+            "partial(create_mqtt_config, device_id=device_id, country=country)",
+            "partial(create_mqtt_config, device_id=device_id, country=country, "
+            "ssl_context=ssl_context)",
+        ),
+        {"findings": []},
+    ),
+    (
+        "self-test: the mqtt config built on the event loop must be found",
+        _broken_case(
+            check_the_mqtt_config_is_built_off_the_event_loop,
+            "coordinator.py",
+            "partial(create_mqtt_config, device_id=device_id, country=country)",
+            "create_mqtt_config(device_id=device_id, country=country)",
+        ),
+        {"findings": []},
+    ),
+    (
+        "self-test: a partial nothing submits to the executor must be found",
+        _broken_case(
+            check_the_mqtt_config_is_built_off_the_event_loop,
+            "coordinator.py",
+            "await self.hass.async_add_executor_job(\n            partial(",
+            "await self.hass.async_run_job(\n            partial(",
         ),
         {"findings": []},
     ),
