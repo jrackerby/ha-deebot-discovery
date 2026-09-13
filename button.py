@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from deebot_client.commands import StationAction
+from deebot_client.commands.json.clean import CleanArea, CleanMode
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.const import EntityCategory
@@ -106,6 +107,31 @@ def _life_span_descriptions(components: Any) -> list[DeebotButtonEntityDescripti
     ]
 
 
+def _room_descriptions(rooms: Any) -> list[DeebotButtonEntityDescription]:
+    """One button per room the robot's own map reports.
+
+    KEYED ON THE ROOM ID, NAMED BY THE ROOM NAME, and those are deliberately
+    different fields. Renaming a room in the Ecovacs app changes what the
+    button is called and must not change which entity it is -- an entity id
+    that moved would take the owner's automations with it. The id is the
+    robot's own handle and is what `CleanArea` is given.
+    """
+    return [
+        DeebotButtonEntityDescription(
+            capability="rooms",
+            key=f"clean_room_{room.id}",
+            translation_key="clean_room",
+            placeholders={"room": room.name},
+            command_fn=(
+                lambda room_id: lambda _c: CleanArea(
+                    mode=CleanMode.SPOT_AREA, area=[room_id]
+                )
+            )(room.id),
+        )
+        for room in rooms
+    ]
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: DeebotConfigEntry,
@@ -118,6 +144,7 @@ async def async_setup_entry(
         return [
             *_station_descriptions(coordinator.device.capabilities),
             *_life_span_descriptions(coordinator.life_span_components),
+            *_room_descriptions(coordinator.rooms),
         ]
 
     async_setup_capability_entities(

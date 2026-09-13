@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import voluptuous as vol
+from deebot_client.commands.json.clean import CleanArea, CleanMode
 from deebot_client.events import FanSpeedEvent, StateEvent
 from deebot_client.models import CleanAction, State
 
@@ -29,7 +31,10 @@ from homeassistant.components.vacuum import (
     VacuumActivity,
     VacuumEntityFeature,
 )
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import config_validation as cv, entity_platform
 
+from .const import DOMAIN
 from .entity import DeebotEntity, DeebotEntityDescription, async_setup_capability_entities
 
 if TYPE_CHECKING:
@@ -52,6 +57,8 @@ _ACTIVITY = {
 #: One entity, gated on the capability that MEASURED the state machine.
 VACUUM = DeebotEntityDescription(capability="state", key="vacuum", name=None)
 
+SERVICE_CLEAN_ROOMS = "clean_rooms"
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -60,6 +67,26 @@ async def async_setup_entry(
 ) -> None:
     """Set up the vacuum entity."""
     async_setup_capability_entities(entry, (VACUUM,), DeebotVacuum, async_add_entities)
+
+    # AN ENTITY SERVICE, NOT A DOMAIN ONE. The target of "clean these rooms"
+    # is a robot, and an entity service lets Home Assistant resolve which one
+    # from an entity, a device, an area or a label without this integration
+    # writing a resolver of its own -- and it is still called
+    # `deebot_discovery.clean_rooms`.
+    entity_platform.async_get_current_platform().async_register_entity_service(
+        SERVICE_CLEAN_ROOMS,
+        {
+            vol.Required("rooms"): vol.All(cv.ensure_list, [cv.string]),
+            # Passed through to the robot's own `count`. Not clamped to a
+            # range this integration cannot measure: what the hardware
+            # accepts is the hardware's to say, and a refusal surfaces as the
+            # command failing rather than as a value silently altered here.
+            vol.Optional("cleanings", default=1): vol.All(
+                vol.Coerce(int), vol.Range(min=1)
+            ),
+        },
+        "async_clean_rooms",
+    )
 
 
 class DeebotVacuum(DeebotEntity, StateVacuumEntity):
@@ -146,3 +173,51 @@ class DeebotVacuum(DeebotEntity, StateVacuumEntity):
     async def _async_clean(self, action: CleanAction) -> None:
         capability = self.coordinator.device.capabilities.clean.action
         await self._execute(capability.command(action))
+
+    async def async_clean_rooms(self, rooms: list[str], cleanings: int = 1) -> None:
+        """Clean the named rooms, in one job, and nothing else.
+
+        NAMES ARE RESOLVED AGAINST WHAT THE ROBOT REPORTS, NOT ACCEPTED ON
+        TRUST. An id the robot does not know is not sent: `CleanArea` would
+        be answered with an errno the owner sees as "the command failed",
+        and the actual mistake -- a room renamed in the Ecovacs app, or a
+        typo -- would be nowhere in that message. So an unknown room raises
+        BEFORE anything is sent, and says which rooms exist.
+
+        ONE COMMAND FOR ALL OF THEM, because `CleanArea` takes a list and the
+        robot plans a single route through it. Sending one command per room
+        would queue several jobs, each returning to the dock, which is not
+        what "clean the kitchen and the hallway" means.
+        """
+        known = self.coordinator.rooms
+        if not known:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="no_rooms"
+            )
+
+        by_name = {room.name.casefold(): room for room in known}
+        by_id = {str(room.id): room for room in known}
+
+        wanted: list[int] = []
+        unknown: list[str] = []
+        for token in rooms:
+            key = token.strip()
+            room = by_name.get(key.casefold()) or by_id.get(key)
+            if room is None:
+                unknown.append(key)
+            elif room.id not in wanted:
+                wanted.append(room.id)
+
+        if unknown:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_rooms",
+                translation_placeholders={
+                    "rooms": ", ".join(unknown),
+                    "known": ", ".join(room.name for room in known),
+                },
+            )
+
+        await self._execute(
+            CleanArea(mode=CleanMode.SPOT_AREA, area=wanted, cleanings=cleanings)
+        )

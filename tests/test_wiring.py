@@ -36,7 +36,7 @@ const, discovery = load("const", "discovery")
 
 #: Modules that must stay importable with neither Home Assistant nor
 #: deebot-client installed. This is the contract the pure suites depend on.
-PURE_MODULES = ("const", "probe", "classify", "discovery")
+PURE_MODULES = ("const", "probe", "classify", "discovery", "rooms")
 
 #: Every platform module, by the Home Assistant platform name it serves.
 PLATFORM_MODULES = (

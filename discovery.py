@@ -196,6 +196,25 @@ CAPABILITIES: Final[tuple[Capability, ...]] = (
         ),
     ),
     Capability(
+        key="rooms",
+        description=(
+            "The robot's saved map, and therefore per-room cleaning. Probed "
+            "with GetCachedMapInfo, which is a read and answers whether the "
+            "robot has a map at all -- the room LIST is fetched separately, "
+            "because GetMapSetV2 needs that map's id and a probe command "
+            "takes no arguments. So this key gates the feature and the "
+            "discovered rooms decide how many buttons exist: a robot that "
+            "keeps a map but reports no readable rooms gets none."
+        ),
+        # NOT SEEDED, AND THAT IS THE MEASUREMENT: the borrowed table's
+        # `capabilities.map` is None, so the sibling model declares no map
+        # support at all. That is also why nothing discovered these rooms
+        # before -- GetCachedMapInfo's own handler only chains onward when
+        # `event_bus.capabilities.map` is set, so on this robot the chain
+        # that normally fetches the room set never fires.
+        seeded=False,
+    ),
+    Capability(
         key="station_action",
         description="Empty the dustbin, wash the mop, dry the mop.",
         probed=False,

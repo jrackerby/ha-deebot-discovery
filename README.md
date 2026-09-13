@@ -122,6 +122,36 @@ updates.
 On a robot that answers fewer of those, fewer entities appear. That is the
 whole point: **degrade to fewer features rather than to none.**
 
+### Cleaning one room
+
+If the robot keeps a saved map, each room on it gets a button —
+`button.<robot>_clean_kitchen` — and there is a service for sending it to
+several at once, as a single job rather than one trip per room:
+
+```yaml
+action: deebot_discovery.clean_rooms
+target:
+  entity_id: vacuum.plumbus
+data:
+  rooms: [Kitchen, Hallway 1]
+  cleanings: 2
+```
+
+Rooms are named by whatever they are called on the robot's own map, which is
+what the Ecovacs app writes — so naming a room there to match its Home
+Assistant area is what makes these line up. A name the robot does not know is
+refused before anything is sent, listing the names it does know; nothing is
+guessed at.
+
+**Getting the names out took a detour worth recording.** `getMapSetV2`
+returns the room list as a compressed blob, and deebot-client reads names
+straight out of it for a 10- or 11-field row. This robot sends **twelve**, so
+the library falls through to asking `getMapSubSet` for each room's name —
+which this robot answers `20003 rcp not support`, every time. The names were
+in the first reply all along. `rooms.py` reads the same two fields upstream
+reads, one column wider; when the library learns this width, the coordinator
+prefers its answer automatically and that module becomes dead code.
+
 ## Installation
 
 Requires Home Assistant **2026.9.0** or newer and [HACS](https://hacs.xyz).
@@ -176,8 +206,15 @@ the map, which costs one probe pass, not a reinstall.
 
 ## Known limitations
 
-- **Maps are not implemented.** No room cleaning, no map card, no positions.
-  The vacuum cleans everything or it cleans nothing.
+- **The map is not drawn.** No map card, no positions, no live path. Per-room
+  cleaning *is* supported — see below — because the room list and the map
+  picture are different things: the first is a short list of ids and names,
+  the second needs the image pieces reassembled, and only the first is needed
+  to send the robot somewhere.
+- **Rooms come from the map the robot is USING.** A robot that has never
+  finished a mapping run reports none and gets no room buttons. Several saved
+  maps are handled by taking the one marked in use, never the first listed —
+  on the robot this was written for, the first slot is empty.
 - **The option lists are borrowed.** There is no read command that enumerates
   the fan speeds or work modes a robot *accepts* — the protocol answers with
   the current value and nothing else. Those lists come from the sibling

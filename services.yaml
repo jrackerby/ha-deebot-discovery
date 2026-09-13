@@ -1,0 +1,31 @@
+# Home Assistant reads a service's UI from here and its NAME and DESCRIPTION
+# from strings.json. Both are needed: a service with no entry here gets no
+# target picker and no fields in the UI, and one with no strings entry shows
+# its raw key as its name.
+clean_rooms:
+  target:
+    entity:
+      integration: deebot_discovery
+      domain: vacuum
+  fields:
+    rooms:
+      required: true
+      example: "[Kitchen, Hallway 1]"
+      selector:
+        # Free text rather than a fixed option list: the rooms come from the
+        # robot's own map and are renamed in the Ecovacs app, so any list
+        # written here would be a copy that goes stale the first time someone
+        # renames one. An unknown name is refused by the service with the
+        # known ones named, which is the check that would otherwise live in
+        # this selector.
+        text:
+          multiple: true
+    cleanings:
+      required: false
+      default: 1
+      example: 2
+      selector:
+        number:
+          min: 1
+          max: 4
+          mode: box
