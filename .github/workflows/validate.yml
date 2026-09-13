@@ -23,61 +23,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  hassfest:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      # Into a subdirectory ON PURPOSE -- the staging step below builds the
-      # layout hassfest expects AT THE WORKSPACE ROOT and cannot do that if
-      # the repo is already checked out there.
-      - uses: actions/checkout@v4
-        with:
-          path: src
-
-      # home-assistant/actions/hassfest takes no path input: it scans
-      # custom_components/* under the workspace. This repo keeps the
-      # integration at its ROOT (hacs.json content_in_root) because that is
-      # the layout HACS installs from, as custom_components/deebot_discovery.
-      - name: stage the custom_components layout hassfest scans
-        run: |
-          set -euo pipefail
-          mkdir -p "custom_components/$DOMAIN"
-          cp -a src/. "custom_components/$DOMAIN/"
-          rm -rf "custom_components/$DOMAIN/.git" \
-                 "custom_components/$DOMAIN/.github" \
-                 "custom_components/$DOMAIN/tests" \
-                 "custom_components/$DOMAIN/tools"
-          test -f "custom_components/$DOMAIN/manifest.json" \
-            || { echo "CANNOT RUN: staging produced no manifest.json -- hassfest would pass vacuously"; exit 1; }
-          echo "staged $(find "custom_components/$DOMAIN" -type f | wc -l) files"
-
-      # What this does NOT do, so nobody reads more into a green run than is
-      # there: hassfest's validate_iqs_file opens with `if not
-      # integration.core: return`, so quality_scale.yaml goes unread for a
-      # custom component while the manifest schema still ACCEPTS a
-      # quality_scale key. A tier declared there is a self-claim with no gate
-      # behind it.
-      - uses: home-assistant/actions/hassfest@master
-
-  tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      # NO homeassistant and NO deebot-client, deliberately. const.py,
-      # probe.py, classify.py and discovery.py import neither, which is the
-      # whole contract of keeping the capability resolver in modules that
-      # cannot reach either one; the wiring suite reads every other module
-      # with `ast` rather than importing it. So a red result here is
-      # attributable to a decision in this repo rather than to a core release
-      # or a vendor library moving underneath it. The imports job below is
-      # where real core has its say.
-      - name: run every suite
-        run: ./tools/run_tests.sh
+  # hassfest, hacs and the shared tests/imports jobs run in
+  # jrackerby/gha-workflows validate-integration.yml (workflow_call);
+  # master's required contexts are "validate / <job>" (jrackerby/HA#821).
+  validate:
+    uses: jrackerby/gha-workflows/.github/workflows/validate-integration.yml@master
+    with:
+      domain: "deebot_discovery"
+      public: true
+      test-requirements: ""
+      run-imports: false
 
   imports:
     # The gate the static suites cannot be: every module except the pure four
@@ -217,39 +172,11 @@ jobs:
           # The real gates. Only `tests` and `scope` are required contexts, so
           # these three can be removed without master noticing. Here is where
           # it notices.
-          for job in hassfest imports hacs; do
-            grep -qE "^  $job:" .github/workflows/validate.yml \
-              || { echo "::error::the '$job' job is gone from validate.yml, and it is not a required context -- nothing else would have caught this"; exit 1; }
-          done
-          echo "manifest present, and hassfest/imports/hacs all still declared"
-
-  hacs:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-
-      # VOID -- NOT A PASS, AND NOT A FAILURE OF THIS REPO. HACS fetches
-      # hacs.json and manifest.json from raw.githubusercontent.com with NO
-      # Authorization header, in CI and in a live install alike, so a private
-      # repository 404s. Reporting it VOID keeps the distinction that
-      # matters: the check did not run, so nothing was proven either way.
-      - name: VOID -- HACS validation cannot run against a private repository
-        if: ${{ github.event.repository.private }}
-        run: |
-          echo "::notice title=HACS validation VOID::this repository is private, so HACS cannot read it"
-          echo "This is a VOID, not a pass."
-
-      # NOTHING IS IGNORED. `brands` used to be, on the reasoning that it
-      # needed an accepted PR against home-assistant/brands -- that reasoning
-      # is now wrong twice over. HACS's own validator resolves the asset to
-      # `brand/icon.png` when `content_in_root` is set (which hacs.json sets)
-      # and returns clean the moment that file is in the tree; and since core
-      # 2026.3 the `custom_integrations` folder of home-assistant/brands is
-      # legacy, because a custom integration serves its own `brand/` directory
-      # through the brands proxy. Both now hold, so the ignore comes off:
-      # ignoring a check that would pass is how a gate quietly stops being one.
-      - uses: hacs/action@main
-        if: ${{ !github.event.repository.private }}
-        with:
-          category: integration
+          # hassfest and hacs run in the shared workflow this file calls
+          # (jrackerby/HA#821); imports stays here because it carries the
+          # seed-class check. Either the job is declared or the call is.
+          grep -qE "^    uses: jrackerby/gha-workflows/.github/workflows/validate-integration.yml@" .github/workflows/validate.yml \
+            || { echo "::error::the shared validate-integration call is gone from validate.yml -- hassfest and hacs would silently stop running"; exit 1; }
+          grep -qE "^  imports:" .github/workflows/validate.yml \
+            || { echo "::error::the 'imports' job is gone from validate.yml, and it is not a required context -- nothing else would have caught this"; exit 1; }
+          echo "manifest present; the shared call and the imports job are still declared"
