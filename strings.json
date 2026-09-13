@@ -49,6 +49,12 @@
   "exceptions": {
     "command_failed": {
       "message": "The robot did not carry out {command}. It may be offline, or it may not support that command."
+    },
+    "no_rooms": {
+      "message": "This robot has not reported any rooms. It needs a saved map, built by a full cleaning run, before it can be sent to one."
+    },
+    "unknown_rooms": {
+      "message": "No room called {rooms} on the robot's map. It knows: {known}."
     }
   },
   "entity": {
@@ -58,20 +64,23 @@
       }
     },
     "button": {
+      "clean_room": {
+        "name": "Clean {room}"
+      },
+      "reset_life_span": {
+        "name": "Reset {component} life"
+      },
+      "station_clean_base": {
+        "name": "Clean base"
+      },
+      "station_dry_mop": {
+        "name": "Dry mop"
+      },
       "station_empty_dustbin": {
         "name": "Empty dustbin"
       },
       "station_wash_mop": {
         "name": "Wash mop"
-      },
-      "station_dry_mop": {
-        "name": "Dry mop"
-      },
-      "station_clean_base": {
-        "name": "Clean base"
-      },
-      "reset_life_span": {
-        "name": "Reset {component} life"
       }
     },
     "number": {
@@ -165,6 +174,22 @@
       },
       "ota": {
         "name": "Automatic firmware updates"
+      }
+    }
+  },
+  "services": {
+    "clean_rooms": {
+      "name": "Clean rooms",
+      "description": "Send the robot to clean one or more named rooms of its saved map, in a single job.",
+      "fields": {
+        "rooms": {
+          "name": "Rooms",
+          "description": "Room names as they appear on the robot's map, or their numeric ids."
+        },
+        "cleanings": {
+          "name": "Passes",
+          "description": "How many times to go over each room. The robot decides what it will accept."
+        }
       }
     }
   }

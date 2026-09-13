@@ -41,6 +41,7 @@ from deebot_client.commands.json.continuous_cleaning import GetContinuousCleanin
 from deebot_client.commands.json.error import GetError
 from deebot_client.commands.json.fan_speed import GetFanSpeed
 from deebot_client.commands.json.life_span import GetLifeSpan
+from deebot_client.commands.json.map import GetCachedMapInfo
 from deebot_client.commands.json.mop_auto_wash_frequency import GetMopAutoWashFrequency
 from deebot_client.commands.json.network import GetNetInfo
 from deebot_client.commands.json.ota import GetOta
@@ -125,6 +126,13 @@ _PROBES: Final[Mapping[str, Callable[[], Command]]] = {
     "work_mode": GetWorkMode,
     "auto_empty": GetAutoEmpty,
     "mop_auto_wash_frequency": GetMopAutoWashFrequency,
+    # The map, not the rooms. `GetMapSetV2` is what lists rooms and it needs
+    # the map's id, which is runtime state -- and every entry here is a
+    # zero-argument factory on purpose, so one pass cannot hand a mutated
+    # command to the next. `GetCachedMapInfo` takes nothing, is a Get, and
+    # answers the question this key is actually gating: does this robot keep
+    # a map to have rooms in. The coordinator does the second call.
+    "rooms": GetCachedMapInfo,
 }
 
 

@@ -21,14 +21,21 @@ inversion this integration exists to refuse.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from deebot_client.api_client import ApiClient
 from deebot_client.authentication import Authenticator, create_rest_config
+from deebot_client.commands.json.map import (
+    GetCachedMapInfo,
+    GetMapSetV2,
+    decompress_base64_data,
+)
 from deebot_client.device import Device
-from deebot_client.events import AvailabilityEvent, LifeSpan, LifeSpanEvent
+from deebot_client.events import AvailabilityEvent, LifeSpan, LifeSpanEvent, RoomsEvent
+from deebot_client.events.map import CachedMapInfoEvent, MapSetType
 from deebot_client.exceptions import (
     DeebotError,
     InvalidAuthenticationError,
@@ -64,6 +71,7 @@ from .const import (
 )
 from .discovery import CONTROL_KEYS, PROBED_KEYS, SEED_HYPOTHESIS, usable_keys
 from .probe import CapabilityState, PassResult, resolve, seed_order
+from .rooms import Room, parse_rooms
 from .seed import build_probe, load_seed
 
 if TYPE_CHECKING:
@@ -163,6 +171,17 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
         # filters out, and then sits at `unknown` until that component is
         # reported again. Measured live: 12 of 13 sensors empty.
         self._life_span: dict[LifeSpan, LifeSpanEvent] = {}
+        # The saved map and the rooms in it. Two separate reads: the map id
+        # comes from GetCachedMapInfo, and GetMapSetV2 needs that id, so
+        # neither can be a probe (a probe command takes no arguments).
+        self._map_id: str | None = None
+        self._rooms: list[Room] = []
+        # Set when deebot-client itself parsed the room set. It only manages
+        # that for subset widths it knows (10 and 11 fields); this robot
+        # sends 12 and falls through. Preferring the library's answer where
+        # it has one means the day upstream learns this width, `rooms.py`
+        # stops being consulted without anything here changing.
+        self._rooms_from_library = False
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -284,6 +303,8 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
 
         device.events.subscribe(AvailabilityEvent, self._on_availability)
         device.events.subscribe(LifeSpanEvent, self._on_life_span)
+        device.events.subscribe(CachedMapInfoEvent, self._on_cached_map_info)
+        device.events.subscribe(RoomsEvent, self._on_rooms)
 
         self._authenticator = authenticator
         self._mqtt = mqtt
@@ -327,6 +348,98 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
             # one in every sense that matters: something became buildable that
             # was not buildable a moment ago.
             self.async_update_listeners()
+
+    # -- the map and its rooms ----------------------------------------------
+
+    async def _on_cached_map_info(self, event: CachedMapInfoEvent) -> None:
+        """Remember which saved map the robot is actually using.
+
+        A robot can hold several maps -- this one has four slots and one
+        built. Only the one in use can be cleaned by room, so a map id is
+        taken from `using` and never from "the first one listed", which on
+        this robot is an empty slot.
+        """
+        in_use = next((m for m in event.maps if m.using), None)
+        self._map_id = in_use.id if in_use is not None else None
+
+    async def _on_rooms(self, event: RoomsEvent) -> None:
+        """Take the library's own room list when it managed to produce one."""
+        self._rooms = sorted(
+            (Room(id=room.id, name=room.name.strip()) for room in event.rooms if room.name.strip()),
+            key=lambda room: room.id,
+        )
+        self._rooms_from_library = True
+
+    @property
+    def rooms(self) -> tuple[Room, ...]:
+        """The rooms of the map currently in use, sorted by id."""
+        return tuple(self._rooms)
+
+    async def _refresh_rooms(self) -> None:
+        """Read the map's room list. Two calls, both Gets, neither a probe.
+
+        THE ROOM NAMES ARE IN THE FIRST REPLY AND THE LIBRARY CANNOT REACH
+        THEM. `GetMapSetV2` returns the rooms as a compressed blob;
+        deebot-client decodes it and, for a 10- or 11-field row, dispatches a
+        `RoomsEvent` carrying id and name. This robot sends TWELVE fields, so
+        that branch does not run and the library instead asks for
+        `GetMapSubSet` per room -- which this robot answers `20003 rcp not
+        support`, eight times. Measured live, firmware 1.103.0.
+
+        So the blob is decompressed with the library's own helper and the two
+        fields upstream already reads are read out of it. `_on_rooms` still
+        wins where it fires; see `rooms.py` for why this is one column wider
+        rather than a second opinion.
+        """
+        self._rooms_from_library = False
+        result, _ = await GetCachedMapInfo()._execute(  # noqa: SLF001
+            self._authenticator, self.device.device_info, self.device.events
+        )
+        # A FAILED READ IS NOT A READING, and the room list follows the same
+        # rule as the capability map: the previous one stands. Emptying it
+        # here would mean a single bad minute on the map service silently
+        # answered "this house has no rooms" -- which is the shape of mistake
+        # this whole integration is built to refuse.
+        if result.state is not HandlingState.SUCCESS:
+            return
+        if self._map_id is None:
+            # Read succeeded and says no map is in use. THAT is a reading: a
+            # robot that has never finished a mapping run, or whose map was
+            # deleted, genuinely has no rooms to offer.
+            self._rooms = []
+            return
+
+        _, raw = await GetMapSetV2(mid=self._map_id, type=MapSetType.ROOMS)._execute(  # noqa: SLF001
+            self._authenticator, self.device.device_info, self.device.events
+        )
+        if self._rooms_from_library:
+            return
+
+        blob = (
+            raw.get("resp", {}).get("body", {}).get("data", {}).get("subsets")
+            if isinstance(raw, dict)
+            else None
+        )
+        if not isinstance(blob, str) or not blob:
+            self._log_condition(
+                "rooms-unreadable", "The robot's map carried no readable room list"
+            )
+            return
+
+        rows = json.loads(decompress_base64_data(blob))
+        parsed = parse_rooms(rows)
+        if rows and not parsed:
+            # Rows arrived and not one was readable -- a subset width this
+            # parser does not know. A finding about the PAYLOAD, not about
+            # the house, so it keeps the rooms it had and says so once rather
+            # than deleting a working room list on a format change.
+            self._log_condition(
+                "rooms-unparsed",
+                f"The robot's room list is in an unrecognised format ({len(rows)} rows)",
+            )
+            LOGGER.debug("Unparsed room subsets: %s", rows)
+            return
+        self._rooms = parsed
 
     @property
     def life_span_components(self) -> frozenset[LifeSpan]:
@@ -399,7 +512,25 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
                 LOGGER.info(
                     "Capability %s is now %s", key, self._states[key].support.value
                 )
-        return usable_keys(self._states)
+
+        usable = usable_keys(self._states)
+        if "rooms" in usable:
+            # AFTER the resolve, so it runs against this pass's answer rather
+            # than the last one's, and inside its own guard: the room list is
+            # a convenience and a pass that measured twenty-two capabilities
+            # must not be thrown away because the map service had a bad
+            # minute. A failure leaves the previous list standing, exactly as
+            # a void pass leaves the previous map standing.
+            try:
+                await self._refresh_rooms()
+            except InvalidAuthenticationError:
+                raise
+            except Exception:  # noqa: BLE001
+                self._log_condition(
+                    "rooms-unreadable", "Could not read the robot's room list"
+                )
+                LOGGER.debug("Room refresh failed", exc_info=True)
+        return usable
 
     async def _probe_pass(self) -> PassResult:
         """Probe in seed order, controls first, until the pass runs out of time.
