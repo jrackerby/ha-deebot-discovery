@@ -172,8 +172,11 @@ jobs:
           # The real gates. Only `tests` and `scope` are required contexts, so
           # these three can be removed without master noticing. Here is where
           # it notices.
-          for job in hassfest imports hacs; do
-            grep -qE "^  $job:" .github/workflows/validate.yml \
-              || { echo "::error::the '$job' job is gone from validate.yml, and it is not a required context -- nothing else would have caught this"; exit 1; }
-          done
-          echo "manifest present, and hassfest/imports/hacs all still declared"
+          # hassfest and hacs run in the shared workflow this file calls
+          # (jrackerby/HA#821); imports stays here because it carries the
+          # seed-class check. Either the job is declared or the call is.
+          grep -qE "^    uses: jrackerby/gha-workflows/.github/workflows/validate-integration.yml@" .github/workflows/validate.yml \
+            || { echo "::error::the shared validate-integration call is gone from validate.yml -- hassfest and hacs would silently stop running"; exit 1; }
+          grep -qE "^  imports:" .github/workflows/validate.yml \
+            || { echo "::error::the 'imports' job is gone from validate.yml, and it is not a required context -- nothing else would have caught this"; exit 1; }
+          echo "manifest present; the shared call and the imports job are still declared"
