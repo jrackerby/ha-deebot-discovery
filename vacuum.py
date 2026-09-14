@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
-from deebot_client.commands.json.clean import CleanArea, CleanMode
+from deebot_client.commands.json.clean import CleanMode
 from deebot_client.events import FanSpeedEvent, StateEvent
 from deebot_client.models import CleanAction, State
 
@@ -178,13 +178,13 @@ class DeebotVacuum(DeebotEntity, StateVacuumEntity):
         """Clean the named rooms, in one job, and nothing else.
 
         NAMES ARE RESOLVED AGAINST WHAT THE ROBOT REPORTS, NOT ACCEPTED ON
-        TRUST. An id the robot does not know is not sent: `CleanArea` would
+        TRUST. An id the robot does not know is not sent: the clean command would
         be answered with an errno the owner sees as "the command failed",
         and the actual mistake -- a room renamed in the Ecovacs app, or a
         typo -- would be nowhere in that message. So an unknown room raises
         BEFORE anything is sent, and says which rooms exist.
 
-        ONE COMMAND FOR ALL OF THEM, because `CleanArea` takes a list and the
+        ONE COMMAND FOR ALL OF THEM, because the area command takes a list and the
         robot plans a single route through it. Sending one command per room
         would queue several jobs, each returning to the dock, which is not
         what "clean the kitchen and the hallway" means.
@@ -218,6 +218,15 @@ class DeebotVacuum(DeebotEntity, StateVacuumEntity):
                 },
             )
 
-        await self._execute(
-            CleanArea(mode=CleanMode.SPOT_AREA, area=wanted, cleanings=cleanings)
-        )
+        # THROUGH THE CAPABILITY, NEVER A DIRECTLY IMPORTED COMMAND CLASS.
+        # Which clean command this robot answers to is a property of its table
+        # (`seed.py`, `_with_v2_clean`), and importing one here hardcoded a
+        # second guess on top of the borrowed one -- the exact shape the
+        # catalogue refuses everywhere else. It cost every room button and
+        # every clean order, silently, for the life of the integration.
+        area = self.coordinator.device.capabilities.clean.action.area
+        if area is None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="no_rooms"
+            )
+        await self._execute(area(CleanMode.SPOT_AREA, wanted, cleanings))

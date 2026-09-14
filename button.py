@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from deebot_client.commands import StationAction
-from deebot_client.commands.json.clean import CleanArea, CleanMode
+from deebot_client.commands.json.clean import CleanMode
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.const import EntityCategory
@@ -123,7 +123,11 @@ def _room_descriptions(rooms: Any) -> list[DeebotButtonEntityDescription]:
     different fields. Renaming a room in the Ecovacs app changes what the
     button is called and must not change which entity it is -- an entity id
     that moved would take the owner's automations with it. The id is the
-    robot's own handle and is what `CleanArea` is given.
+    robot's own handle and is what the clean command is given.
+
+    The command comes off the CAPABILITY rather than an imported class: which
+    form this robot answers to is decided in one place (`seed.py`), and these
+    buttons sent a refused one until that was true.
     """
     return [
         DeebotButtonEntityDescription(
@@ -133,8 +137,8 @@ def _room_descriptions(rooms: Any) -> list[DeebotButtonEntityDescription]:
             placeholders={"room": room.name},
             room_id=room.id,
             command_fn=(
-                lambda room_id: lambda _c: CleanArea(
-                    mode=CleanMode.SPOT_AREA, area=[room_id]
+                lambda room_id: lambda c: c.clean.action.area(
+                    CleanMode.SPOT_AREA, [room_id], 1
                 )
             )(room.id),
         )
