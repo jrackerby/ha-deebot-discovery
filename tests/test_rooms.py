@@ -165,6 +165,71 @@ FAIL_CASES = [
 ]
 
 
+# -- find_room: the lookup the room buttons make on every update -------------
+#
+# It carries two consequences and they fail differently. A miss on a RENAME
+# leaves a button labelled with the old name; a miss on a DELETION leaves a
+# button that is still pressable and sends `CleanArea` for an area the robot
+# no longer has. The second is why `None` has to mean "gone", never "empty".
+
+PARSED = rooms.parse_rooms(MEASURED)
+
+
+def case_find_by_id():
+    room = rooms.find_room(PARSED, 8)
+    return {"found": (room.id, room.name) if room else None}
+
+
+def case_find_missing_id_is_none():
+    """A room deleted from the map. Must be None, not the nearest thing."""
+    return {"found": rooms.find_room(PARSED, 9999)}
+
+
+def case_find_in_empty_map_is_none():
+    return {"found": rooms.find_room([], 8)}
+
+
+def case_find_reads_the_current_name():
+    """The rename case: same id, new name, and the lookup follows the name."""
+    renamed = [
+        rooms.Room(id=8, name="Scullery") if room.id == 8 else room
+        for room in PARSED
+    ]
+    room = rooms.find_room(renamed, 8)
+    return {"found": (room.id, room.name) if room else None}
+
+
+def case_find_does_not_match_on_name():
+    """The id is the handle. A string that looks like one must not match."""
+    return {"found": rooms.find_room(PARSED, "8")}
+
+
+CASES += [
+    ("find_room returns the room with that id", case_find_by_id, {"found": (8, "Kitchen")}),
+    ("a deleted room's id yields None", case_find_missing_id_is_none, {"found": None}),
+    ("an empty map yields None", case_find_in_empty_map_is_none, {"found": None}),
+    (
+        "a renamed room is found under its id, with the new name",
+        case_find_reads_the_current_name,
+        {"found": (8, "Scullery")},
+    ),
+    ("a string id does not match an int id", case_find_does_not_match_on_name, {"found": None}),
+]
+
+FAIL_CASES += [
+    (
+        "self-test: a missing id must not resolve to a room",
+        case_find_missing_id_is_none,
+        {"found": (8, "Kitchen")},
+    ),
+    (
+        "self-test: a rename must not keep reporting the old name",
+        case_find_reads_the_current_name,
+        {"found": (8, "Kitchen")},
+    ),
+]
+
+
 def main():
     return run_suite(CASES, FAIL_CASES)
 
