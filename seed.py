@@ -29,12 +29,14 @@ wrong here -- confidently, and about a robot nobody measured.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Final
 
 from deebot_client.commands.json.auto_empty import GetAutoEmpty
 from deebot_client.commands.json.battery import GetBattery
 from deebot_client.commands.json.charge_state import GetChargeState
 from deebot_client.commands.json.child_lock import GetChildLock
+from deebot_client.commands.json.clean import CleanAreaV2, CleanV2
 from deebot_client.commands.json.clean_count import GetCleanCount
 from deebot_client.commands.json.clean_logs import GetCleanLogs
 from deebot_client.commands.json.continuous_cleaning import GetContinuousCleaning
@@ -52,6 +54,7 @@ from deebot_client.commands.json.voice_assistant_state import GetVoiceAssistantS
 from deebot_client.commands.json.volume import GetVolume
 from deebot_client.commands.json.water_info import GetWaterInfo
 from deebot_client.commands.json.work_mode import GetWorkMode
+from deebot_client.capabilities import CapabilityCleanAction
 from deebot_client.events import LifeSpan
 from deebot_client.hardware import get_static_device_info
 
@@ -190,4 +193,50 @@ async def load_seed() -> StaticDeviceInfo:
             "from is gone and a new one must be chosen"
         )
         raise LookupError(msg)
-    return static
+    return _with_v2_clean(static)
+
+
+def _with_v2_clean(static: StaticDeviceInfo) -> StaticDeviceInfo:
+    """Swap the borrowed table's clean commands for their `_V2` forms.
+
+    MEASURED, NOT ASSUMED, AND IT COST A NIGHT'S CLEAN TO FIND OUT. The seed
+    table wires `clean.action` to `Clean`/`CleanArea`, whose wire name is
+    `clean`. On this robot every one of those answers
+    `{'code': 20003, 'msg': 'rcp not support'}` -- the same refusal it gives
+    `getMapSubSet`, and the same code the probe treats as "does not support
+    the command" everywhere else. So `clean_rooms`, every room button and
+    `vacuum.start`/`pause`/`stop` all failed, silently, until one of them was
+    finally sent.
+
+    WHY THIS IS AN OVERRIDE AND NOT A PROBE. `clean_action` is the one
+    capability the catalogue cannot measure: every command it carries would
+    send the robot out cleaning, so `discovery.py` implies it from `state`
+    rather than probing it. That implication is sound about WHETHER the robot
+    takes a clean order -- it answered `GetChargeState`, so it has the state
+    machine the order drives -- and says nothing about which command NAME
+    carries it. This fills exactly that gap and nothing else.
+
+    WHY NOT CHANGE `SEED_CLASS` INSTEAD, which would be one constant: no `_V2`
+    table in deebot-client is a superset of this one. Measured over all 106 of
+    them, the closest miss either `voice_assistant` or
+    `mop_auto_wash_frequency`, and this robot reports both -- so borrowing a
+    `_V2` table wholesale would delete a working entity to fix an unrelated
+    command. The narrow swap keeps every probed capability exactly as it was.
+
+    The rest of the table is left alone deliberately. `state` also carries
+    `GetWorkState`, which the `_V2` tables replace with `GetCleanInfoV2`;
+    whether this robot refuses that one too is unmeasured, and swapping it on
+    the strength of this finding would be the second guess the catalogue
+    refuses to laundering through the first.
+    """
+    capabilities = static.capabilities
+    return replace(
+        static,
+        capabilities=replace(
+            capabilities,
+            clean=replace(
+                capabilities.clean,
+                action=CapabilityCleanAction(command=CleanV2, area=CleanAreaV2),
+            ),
+        ),
+    )
