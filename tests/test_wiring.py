@@ -526,6 +526,70 @@ def check_the_mqtt_config_is_built_off_the_event_loop(tree):
     return findings
 
 
+
+def check_room_buttons_keep_their_live_lookup(tree):
+    """Room buttons must re-read the map, not freeze it at construction.
+
+    A room can be renamed or deleted in the Ecovacs app while the entry is
+    loaded. Both used to need a reload, and BOTH FAIL SILENTLY: a rename left
+    the old name on the button, and a deletion left it pressable, sending
+    `CleanArea` for an area the robot no longer has. `DeebotRoomButton`
+    answers both by looking the room up on every update.
+
+    Nothing about that is visible in a dashboard screenshot, and the way it
+    would come back is not a deleted class -- it is the dispatcher in
+    `async_setup_entry` quietly going back to building plain `DeebotButton`s,
+    which leaves the class sitting there, tested, and unused.
+    """
+    module = _modules(tree).get("button")
+    if module is None:
+        return ["button.py is missing"]
+
+    findings = []
+
+    classes = {
+        node.name: node for node in ast.walk(module) if isinstance(node, ast.ClassDef)
+    }
+    room_button = classes.get("DeebotRoomButton")
+    if room_button is None:
+        return ["button.py no longer defines DeebotRoomButton"]
+
+    defined = {
+        node.name
+        for node in room_button.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    for required, why in (
+        ("available", "a button for a deleted room would stay pressable"),
+        ("_handle_coordinator_update", "a renamed room would keep its old name"),
+    ):
+        if required not in defined:
+            findings.append(
+                f"DeebotRoomButton does not define {required}() -- {why}"
+            )
+
+    constructed = {
+        node.func.id
+        for node in ast.walk(module)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    if "DeebotRoomButton" not in constructed:
+        findings.append(
+            "DeebotRoomButton is defined but never constructed -- the setup"
+            " dispatcher is not building room buttons with it"
+        )
+
+    if not any(
+        _keyword(call, "room_id") is not None for call in _description_calls(module)
+    ):
+        findings.append(
+            "no button description sets room_id -- the dispatcher cannot tell"
+            " a room button from any other button"
+        )
+
+    return findings
+
+
 CHECKS = (
     ("everything parses", check_everything_parses),
     ("the pure layer imports neither HA nor the vendor library", check_pure_layer_stays_pure),
@@ -540,6 +604,7 @@ CHECKS = (
     ("the password is hashed before it is sent", check_the_password_is_hashed_before_it_is_sent),
     ("the mqtt config keeps the library's tls settings", check_the_mqtt_config_keeps_the_library_tls_settings),
     ("the mqtt config is built off the event loop", check_the_mqtt_config_is_built_off_the_event_loop),
+    ("room buttons keep their live lookup", check_room_buttons_keep_their_live_lookup),
 )
 
 TREE = read_tree()
@@ -562,6 +627,26 @@ CASES = [(name, _case(check), {"findings": []}) for name, check in CHECKS]
 # catch, and each must be FOUND -- expecting no findings from a broken tree
 # is the wrong answer this proves the check refuses.
 FAIL_CASES = [
+    (
+        "self-test: a dispatcher that stops building room buttons must be found",
+        _broken_case(
+            check_room_buttons_keep_their_live_lookup,
+            "button.py",
+            "            return DeebotRoomButton(coordinator, description)",
+            "            return DeebotButton(coordinator, description)",
+        ),
+        {"findings": []},
+    ),
+    (
+        "self-test: a room button that stops overriding available must be found",
+        _broken_case(
+            check_room_buttons_keep_their_live_lookup,
+            "button.py",
+            "    def available(self) -> bool:\n        \"\"\"Unavailable once the room leaves the map.",
+            "    def unused_availability(self) -> bool:\n        \"\"\"Unavailable once the room leaves the map.",
+        ),
+        {"findings": []},
+    ),
     (
         "self-test: a syntax error must be found",
         _broken_case(

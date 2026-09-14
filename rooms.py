@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING, Any, Final
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-__all__ = ["MIN_NAMED_FIELDS", "Room", "parse_rooms"]
+__all__ = ["MIN_NAMED_FIELDS", "Room", "find_room", "parse_rooms"]
 
 #: Where the two fields worth reading sit. Positional because the vendor
 #: format is positional -- there are no keys to read.
@@ -102,3 +102,28 @@ def parse_rooms(subsets: Iterable[Any]) -> list[Room]:
         # to append last.
         rooms.setdefault(room_id, Room(id=room_id, name=name))
     return sorted(rooms.values(), key=lambda room: room.id)
+
+
+def find_room(rooms: Iterable[Room], room_id: int) -> Room | None:
+    """The room the map currently carries under this id, or None.
+
+    KEPT HERE, IN THE PURE LAYER, because the entity layer needs to ask it on
+    every coordinator update and this is the half that can be exercised
+    without Home Assistant. Two callers depend on the None:
+
+      * a room's button is named from what this returns, so a rename in the
+        Ecovacs app reaches the glass; and
+      * the same button reports unavailable when it returns None, because a
+        room DELETED from the map still has an entity -- entities are never
+        removed on a demotion (`entity.py`) -- and pressing it would send
+        `CleanArea` for an area the robot no longer has, which surfaces as a
+        bare "command failed" naming nothing.
+
+    A linear scan, deliberately: this runs per entity per update over a map
+    with single-digit room counts, and an index would have to be invalidated
+    every time the map changed.
+    """
+    for room in rooms:
+        if room.id == room_id:
+            return room
+    return None

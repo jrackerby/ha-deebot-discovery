@@ -14,6 +14,7 @@ table alone:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -29,6 +30,7 @@ from .entity import (
     LazyDescriptions,
     async_setup_capability_entities,
 )
+from .rooms import find_room
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -42,12 +44,19 @@ if TYPE_CHECKING:
 
 PARALLEL_UPDATES = 1
 
+_LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, kw_only=True)
 class DeebotButtonEntityDescription(DeebotEntityDescription, ButtonEntityDescription):
     """An action and how to build the command that performs it."""
 
     command_fn: Callable[[Any], Command]
+
+    #: Set only on the per-room buttons: the map id this button addresses.
+    #: Carried here rather than parsed back out of `key` so the lookup does
+    #: not depend on how the key happens to be spelled.
+    room_id: int | None = None
 
 
 #: Action -> translation key, written out as literals rather than built from
@@ -122,6 +131,7 @@ def _room_descriptions(rooms: Any) -> list[DeebotButtonEntityDescription]:
             key=f"clean_room_{room.id}",
             translation_key="clean_room",
             placeholders={"room": room.name},
+            room_id=room.id,
             command_fn=(
                 lambda room_id: lambda _c: CleanArea(
                     mode=CleanMode.SPOT_AREA, area=[room_id]
@@ -147,8 +157,17 @@ async def async_setup_entry(
             *_room_descriptions(coordinator.rooms),
         ]
 
+    def _build(
+        coordinator: Any, description: DeebotButtonEntityDescription
+    ) -> DeebotEntity:
+        # Only the room buttons need the live lookup; everything else is
+        # fixed for the life of the entry and pays nothing for it.
+        if description.room_id is not None:
+            return DeebotRoomButton(coordinator, description)
+        return DeebotButton(coordinator, description)
+
     async_setup_capability_entities(
-        entry, LazyDescriptions(_descriptions), DeebotButton, async_add_entities
+        entry, LazyDescriptions(_descriptions), _build, async_add_entities
     )
 
 
@@ -161,3 +180,92 @@ class DeebotButton(DeebotEntity, ButtonEntity):
         await self._execute(
             self.entity_description.command_fn(self.coordinator.device.capabilities)
         )
+
+
+class DeebotRoomButton(DeebotButton):
+    """A room button that re-reads its room on every coordinator update.
+
+    The map is not fixed for the life of the config entry: a room can be
+    renamed in the Ecovacs app, and a room can be deleted from the map
+    entirely. Both used to need an entry reload to show up here, because a
+    description is read once when the entity is constructed and
+    `async_setup_capability_entities` never rebuilds a key it has already
+    added -- correctly, since rebuilding is how an entity id moves.
+
+    WHAT DOES NOT CHANGE IS THE ENTITY ID. The button stays keyed on the room
+    id (`button.py`'s `_room_descriptions` says why), so a rename moves the
+    NAME and nothing else, and a deletion leaves the row in the registry
+    rather than taking the owner's automations with it.
+    """
+
+    entity_description: DeebotButtonEntityDescription
+
+    def __init__(
+        self, coordinator: Any, description: DeebotButtonEntityDescription
+    ) -> None:
+        super().__init__(coordinator, description)
+        if description.room_id is None:
+            raise ValueError(f"{description.key} is not a room button")
+        self._room_id: int = description.room_id
+        room = find_room(coordinator.rooms, self._room_id)
+        self._room_name: str | None = room.name if room else None
+        #: Latched, so the warning below is deduped on the CONDITION rather
+        #: than on its message text (LAW.md §15).
+        self._rename_unrenderable = False
+
+    @property
+    def available(self) -> bool:
+        """Unavailable once the room leaves the map.
+
+        The base rule cannot answer this: it gates on the `rooms` CAPABILITY,
+        which stays usable while the robot still has a map -- so a button for
+        a deleted room stayed pressable and sent `CleanArea` for an area the
+        robot no longer knows, which comes back as a bare "command failed"
+        naming nothing. Refusing at the entity is the same refusal
+        `deebot_discovery.clean_rooms` already makes by name.
+        """
+        return super().available and find_room(self.coordinator.rooms, self._room_id) is not None
+
+    def _handle_coordinator_update(self) -> None:
+        room = find_room(self.coordinator.rooms, self._room_id)
+        if room is not None and room.name != self._room_name:
+            self._rename(room.name)
+        super()._handle_coordinator_update()
+
+    def _rename(self, name: str) -> None:
+        """Point the button's translated name at the room's new name.
+
+        INVALIDATING THE CACHE IS THE WHOLE JOB, and it is not the obvious
+        line. Assigning `_attr_translation_placeholders` invalidates the
+        cached `translation_placeholders` and NOTHING DERIVED FROM IT, while
+        the displayed name comes from `Entity.name` -- a `cached_property`
+        that substitutes the placeholders once, inside `_name_internal`.
+        Setting the placeholders alone therefore changes nothing on the wall,
+        which is the failure this method exists to avoid shipping.
+
+        Popping the entry is how Home Assistant's own `CachedProperties`
+        setters invalidate, and once `name` differs from the registry's
+        stored `original_name`, `async_get_full_entity_name` prefers the live
+        value -- so the new name reaches the state's `friendly_name`. Read
+        against home-assistant 2026.9.2; the registry's own `original_name`
+        is left alone, so Settings keeps showing the name the room had when
+        the entity was first added.
+
+        If a future core stops caching `name` this way the pop becomes a
+        no-op and the symptom returns silently, so the failure is checked for
+        rather than assumed away.
+        """
+        previous = self.name
+        self._room_name = name
+        self._attr_translation_placeholders = {"room": name}
+        self.__dict__.pop("name", None)
+        if self.name == previous and not self._rename_unrenderable:
+            self._rename_unrenderable = True
+            _LOGGER.warning(
+                "Room %s is now called %r on the robot's map, but this button's"
+                " name did not change -- Home Assistant's entity-name cache was"
+                " not invalidated by this integration. Reload the config entry"
+                " to pick the name up, and see DeebotRoomButton._rename",
+                self._room_id,
+                name,
+            )
