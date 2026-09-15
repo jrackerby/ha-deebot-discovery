@@ -146,9 +146,40 @@ jobs:
     # exist. hassfest, imports and hacs are NOT required contexts, so any of
     # them could be deleted and master would accept the change without
     # comment. This job is where that gets noticed.
+    #
+    # IT IS ALSO THE MERGE GATE FOR EVERY OTHER JOB IN THIS FILE (#21).
+    # `scope` and `validate / tests` both finish inside ten seconds, while
+    # `imports` -- the only job that imports the modules against real core --
+    # takes a minute, so an armed auto-merge could land a request before it
+    # had spoken. On #20 and again on #30 `imports` went green three seconds
+    # ahead of the merge: luck, not a gate. Adding it to master's required
+    # contexts would close the window too, but that is a branch-protection
+    # edit, invisible from the tree and unavailable to the sessions that do
+    # the work here. So the gate lives in the file instead.
+    #
+    # `if: always()` IS AS LOAD-BEARING AS THE NAME. A job skipped because a
+    # `needs:` failed reports the conclusion `skipped`, and branch protection
+    # counts a skipped required check as PASSED -- so a bare `needs:` would
+    # turn a red `imports` into a green merge, strictly worse than no gate.
+    # This job must always run, and decide for itself.
+    needs: [validate, imports]
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # Decisive read first: nothing below is worth running if the jobs this
+      # one gates on did not pass.
+      - name: every other job has reported, and reported success
+        run: |
+          set -euo pipefail
+          BAD=""
+          for PAIR in "validate=${{ needs.validate.result }}" "imports=${{ needs.imports.result }}"; do
+            NAME="${PAIR%%=*}"; RESULT="${PAIR#*=}"
+            echo "$NAME: $RESULT"
+            test "$RESULT" = "success" || BAD="$BAD $NAME($RESULT)"
+          done
+          test -z "$BAD" \
+            || { echo "::error::merge gate:$BAD -- this is a required context, so the request cannot land"; exit 1; }
       - uses: actions/checkout@v4
       - name: assert this repo is an integration, and still validated as one
         run: |
@@ -179,4 +210,16 @@ jobs:
             || { echo "::error::the shared validate-integration call is gone from validate.yml -- hassfest and hacs would silently stop running"; exit 1; }
           grep -qE "^  imports:" .github/workflows/validate.yml \
             || { echo "::error::the 'imports' job is gone from validate.yml, and it is not a required context -- nothing else would have caught this"; exit 1; }
-          echo "manifest present; the shared call and the imports job are still declared"
+          # And the gate above -- the only reason any of those three get to
+          # speak before a merge (#21). Deleting the `needs:` line restores
+          # the race, and nothing else would report it.
+          grep -qE "^    needs: \[validate, imports\]$" .github/workflows/validate.yml \
+            || { echo "::error::'scope' no longer waits on 'validate' and 'imports' -- an armed request can merge before either has reported"; exit 1; }
+          # The release workflow is how a version reaches HACS at all (#19):
+          # the store reads releases only, so without it a bumped
+          # manifest.json ships to nobody and the install is a hand write.
+          test -f .github/workflows/release.yml \
+            || { echo "::error::.github/workflows/release.yml is gone -- no version bump would ever be tagged or released, and HACS reads releases only"; exit 1; }
+          grep -qE "^          gh release create " .github/workflows/release.yml \
+            || { echo "::error::release.yml no longer creates a release -- a bumped manifest.json would tag nothing"; exit 1; }
+          echo "manifest present; the shared call, the imports job, the merge gate and the release workflow are all still declared"
