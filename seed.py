@@ -36,7 +36,7 @@ from deebot_client.commands.json.auto_empty import GetAutoEmpty
 from deebot_client.commands.json.battery import GetBattery
 from deebot_client.commands.json.charge_state import GetChargeState
 from deebot_client.commands.json.child_lock import GetChildLock
-from deebot_client.commands.json.clean import CleanAreaV2, CleanV2
+from deebot_client.commands.json.clean import CleanAreaV2, CleanMode, CleanV2
 from deebot_client.commands.json.clean_count import GetCleanCount
 from deebot_client.commands.json.clean_logs import GetCleanLogs
 from deebot_client.commands.json.continuous_cleaning import GetContinuousCleaning
@@ -66,7 +66,7 @@ if TYPE_CHECKING:
     from deebot_client.command import Command
     from deebot_client.models import StaticDeviceInfo
 
-__all__ = ["SEED_CLASS", "build_probe", "load_seed"]
+__all__ = ["CLEAN_AREA_MODE", "SEED_CLASS", "build_probe", "load_seed"]
 
 #: The sibling class whose table is borrowed. `k2iwaq`, `qhh2k5`, `rx6f4s` and
 #: `twunby` are all DEEBOT T90 PRO OMNI and their modules are byte-identical in
@@ -75,6 +75,40 @@ __all__ = ["SEED_CLASS", "build_probe", "load_seed"]
 #: search over 248 modules for "one that looks close" is a guess with a loop
 #: around it.
 SEED_CLASS: Final = "rx6f4s"
+
+#: The `content.type` this robot answers to for a per-area clean.
+#:
+#: MEASURED ONE TOKEN AT A TIME AGAINST THE ROBOT (#27), because `clean_V2`
+#: reads its target off `content.type` and this firmware's vocabulary is not
+#: the one deebot-client assumes. Swept 2026-09-15 on firmware 1.103.0, every
+#: candidate sent with a room id the map does not carry:
+#:
+#:     freeClean    -> code 0, ok                 <- this one
+#:     entrust      -> code 0, ok                 (delegated, not per-area)
+#:     spot         -> code 1000, a C++ range check over `content.value`
+#:     mapPoint     -> code 1000, the same        (both take coordinates)
+#:     spotArea     -> code 20011, unknown type
+#:     customArea   -> code 20011, unknown type
+#:     area, room, rooms, spotarea, selectArea, zone, border, singleRoom,
+#:     subArea, mapArea                           -> all 20011, unknown type
+#:
+#: `20011 unknown type` is this firmware saying it has no such mode, and it is
+#: what `CleanMode.SPOT_AREA` -- deebot-client's own default for an area
+#: clean, and what this integration sent until now -- gets every time.
+#:
+#: WHY IT LIVES HERE AND NOT AT THE CALL SITE. The mode is half of the wire
+#: form; the command class is the other half, and `_with_v2_clean` below
+#: already owns that half. Splitting them put `CleanMode.SPOT_AREA` in
+#: `vacuum.py` and `button.py` as a literal nobody had measured, which is the
+#: same shape of mistake as the hardcoded `CleanArea` those two call sites
+#: just stopped carrying. One module knows what a command is called.
+#:
+#: IT ALSO MAKES `cleanings` REAL, which is a second bug closing quietly.
+#: `CleanAreaV2` prefixes the pass count to `content.value` for FREE_CLEAN
+#: ALONE and drops it silently for every other mode, so `clean_rooms` has
+#: advertised a `cleanings` parameter it could not honour for as long as it
+#: sent SPOT_AREA.
+CLEAN_AREA_MODE: Final = CleanMode.FREE_CLEAN
 
 #: The consumables the life-span probe asks about. This is a QUESTION, not a
 #: claim: the response names which of them this robot actually reports, and

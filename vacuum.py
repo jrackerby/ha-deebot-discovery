@@ -22,7 +22,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
-from deebot_client.commands.json.clean import CleanMode
 from deebot_client.events import FanSpeedEvent, StateEvent
 from deebot_client.models import CleanAction, State
 
@@ -36,6 +35,7 @@ from homeassistant.helpers import config_validation as cv, entity_platform
 
 from .const import DOMAIN
 from .entity import DeebotEntity, DeebotEntityDescription, async_setup_capability_entities
+from .seed import CLEAN_AREA_MODE
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -218,15 +218,17 @@ class DeebotVacuum(DeebotEntity, StateVacuumEntity):
                 },
             )
 
-        # THROUGH THE CAPABILITY, NEVER A DIRECTLY IMPORTED COMMAND CLASS.
-        # Which clean command this robot answers to is a property of its table
-        # (`seed.py`, `_with_v2_clean`), and importing one here hardcoded a
-        # second guess on top of the borrowed one -- the exact shape the
-        # catalogue refuses everywhere else. It cost every room button and
-        # every clean order, silently, for the life of the integration.
+        # THROUGH THE CAPABILITY AND `seed.py`, NEVER A LITERAL HERE. A
+        # per-area clean has two halves on the wire -- the command class and
+        # the `content.type` that names the mode -- and BOTH are properties of
+        # this robot's firmware rather than of this service. Each was wrong
+        # here in turn: the hardcoded `CleanArea` cost every clean order until
+        # #28, and `CleanMode.SPOT_AREA`, which reads like a library default
+        # and was never measured, cost every one of them again until #27.
+        # `seed.py` carries both, with what was sent to find out.
         area = self.coordinator.device.capabilities.clean.action.area
         if area is None:
             raise ServiceValidationError(
                 translation_domain=DOMAIN, translation_key="no_rooms"
             )
-        await self._execute(area(CleanMode.SPOT_AREA, wanted, cleanings))
+        await self._execute(area(CLEAN_AREA_MODE, wanted, cleanings))
