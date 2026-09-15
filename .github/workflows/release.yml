@@ -1,0 +1,96 @@
+name: release
+
+# WHY THE REPO CUTS ITS OWN RELEASE. HACS reads this repo's RELEASES and not
+# its default branch -- hacs.json sets `hide_default_branch` -- so a version
+# with no release is a version the store cannot offer, and the only way it
+# reaches the running instance is a hand write over the HACS install, leaving
+# the row reading one version while the directory holds another (#19,
+# jrackerby/HA#781). Cutting the tag by hand is not available to the sessions
+# that do the work here: a cloud session pushes branches fine and is answered
+# `HTTP 403` on `git push origin refs/tags/<v>` -- measured again 2026-09-15,
+# after #19 first recorded it. So the tag and the release are cut by Actions,
+# from the token it already holds, and no session needs the permission.
+#
+# NO SEPARATE PROOF STEP. Master is protected and `validate` is what gets a
+# commit onto it, so a commit this workflow sees has already been validated;
+# re-running the suite here would prove the same thing about the same tree.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Never cancel a half-created release: `cancel-in-progress` here could leave a
+# tag pushed with no release behind it, which is the exact half-landed state
+# this workflow exists to prevent.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # workflow_dispatch takes any ref. A release cut off a branch would be
+      # offered to every HACS install as the current version.
+      - name: releases come off master only
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/master" \
+            || { echo "::error::refusing to release from $GITHUB_REF -- master only"; exit 1; }
+
+      - name: the version manifest.json declares
+        id: manifest
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 -c 'import json;print(json.load(open("manifest.json"))["version"])')"
+          test -n "$VERSION" \
+            || { echo "::error::manifest.json declares no version"; exit 1; }
+          # The manifest holds the bare version and the tag carries the `v`.
+          # A manifest that had grown the prefix would tag `vv1.3.1` and the
+          # mismatch would only show up as a store offering nothing.
+          case "$VERSION" in
+            v*) echo "::error::manifest version is '$VERSION' -- the manifest holds the bare version, the tag carries the v"; exit 1 ;;
+          esac
+          echo "manifest version: $VERSION"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: cut the tag and the release, if this version has not been
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.manifest.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          # Idempotent by design: this runs on every push to master, and most
+          # pushes do not bump the version.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG is already released -- nothing to cut"
+            exit 0
+          fi
+
+          # A tag with no release is the half-landed state. Adopt it only if
+          # it points where we are; a tag pointing elsewhere means the version
+          # was reused, which silently reships old code under a new number.
+          if EXISTING="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha 2>/dev/null)"; then
+            test "$EXISTING" = "$GITHUB_SHA" \
+              || { echo "::error::$TAG already exists at $EXISTING but master is at $GITHUB_SHA -- manifest.json reuses a released version"; exit 1; }
+            echo "$TAG already points here; creating the missing release on it"
+          fi
+
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes
+
+          # Verify by read-back, not by the call returning.
+          gh release view "$TAG" --json tagName,targetCommitish,isDraft \
+            --jq '"released \(.tagName) draft=\(.isDraft)"'
+          test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "false" \
+            || { echo "::error::$TAG was created as a draft -- HACS cannot see a draft release"; exit 1; }
