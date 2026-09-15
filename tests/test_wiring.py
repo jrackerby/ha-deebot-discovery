@@ -590,6 +590,36 @@ def check_room_buttons_keep_their_live_lookup(tree):
     return findings
 
 
+def check_the_wire_form_lives_in_seed(tree):
+    """Only `seed.py` may name a clean command or a clean mode.
+
+    BOTH HALVES OF A PER-AREA CLEAN HAVE ALREADY BEEN WRONG AT A CALL SITE.
+    `vacuum.py` and `button.py` imported `CleanArea` and sent a command this
+    robot refuses (#28), and then imported `CleanMode` and sent a mode it
+    refuses (#27) -- twice over, a literal that reads like a library default
+    and was never measured against the robot. `seed.py` is where a wire form
+    is decided and where the measurement behind it is written down, so the
+    gate is that no other module imports from the library's clean module at
+    all. A rule you wrote is not a rule you follow.
+    """
+    findings = []
+    for name, module in _modules(tree).items():
+        if name == "seed":
+            continue
+        for node in ast.walk(module):
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.level == 0
+                and node.module == "deebot_client.commands.json.clean"
+            ):
+                names = ", ".join(alias.name for alias in node.names)
+                findings.append(
+                    f"{name}.py imports {names} from deebot_client's clean module --"
+                    " the wire form belongs in seed.py, with what was measured"
+                )
+    return findings
+
+
 CHECKS = (
     ("everything parses", check_everything_parses),
     ("the pure layer imports neither HA nor the vendor library", check_pure_layer_stays_pure),
@@ -605,6 +635,7 @@ CHECKS = (
     ("the mqtt config keeps the library's tls settings", check_the_mqtt_config_keeps_the_library_tls_settings),
     ("the mqtt config is built off the event loop", check_the_mqtt_config_is_built_off_the_event_loop),
     ("room buttons keep their live lookup", check_room_buttons_keep_their_live_lookup),
+    ("the clean wire form lives in seed.py", check_the_wire_form_lives_in_seed),
 )
 
 TREE = read_tree()
@@ -795,6 +826,17 @@ FAIL_CASES = [
             "manifest.json",
             '"domain": "deebot_discovery"',
             '"domain": "deebot_estate"',
+        ),
+        {"findings": []},
+    ),
+    (
+        "self-test: a clean mode imported at a call site must be found",
+        _broken_case(
+            check_the_wire_form_lives_in_seed,
+            "vacuum.py",
+            "from deebot_client.events import FanSpeedEvent, StateEvent",
+            "from deebot_client.commands.json.clean import CleanMode\n"
+            "from deebot_client.events import FanSpeedEvent, StateEvent",
         ),
         {"findings": []},
     ),

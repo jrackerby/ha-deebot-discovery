@@ -152,6 +152,29 @@ in the first reply all along. `rooms.py` reads the same two fields upstream
 reads, one column wider; when the library learns this width, the coordinator
 prefers its answer automatically and that module becomes dead code.
 
+**Sending the room took a second detour, and the same shape of mistake twice.**
+A per-area clean has two halves on the wire: a command, and a `content.type`
+naming the mode. deebot-client's table for the sibling model gets both wrong
+for this firmware, and each was found only by sending it:
+
+| sent | answer |
+| --- | --- |
+| `clean` — the v1 command | `20003 rcp not support` |
+| `clean_V2` + `spotArea` — the library's default for an area | `20011 unknown type` |
+| `clean_V2` + `freeClean` | accepted; the robot cleans the named rooms |
+
+`20003` is "no such command"; `20011` is "no such mode". Fourteen other tokens
+were swept and answered `20011` too, while `spot` and `mapPoint` came back with
+a C++ range check over `content.value` — this firmware knows those, and they
+take coordinates rather than room ids. `freeClean` is the one that names rooms.
+
+Both halves now live in `seed.py`, next to what was sent to find out, and a
+static check keeps them from drifting back to a call site: **the two literals
+that caused this were both plausible library defaults nobody had measured.**
+One good thing falls out of it — deebot-client puts the pass count into
+`content.value` for `freeClean` and for no other mode, so `cleanings:` above is
+honoured now, where under `spotArea` it was silently dropped.
+
 ## Installation
 
 Requires Home Assistant **2026.9.0** or newer and [HACS](https://hacs.xyz).

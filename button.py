@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from deebot_client.commands import StationAction
-from deebot_client.commands.json.clean import CleanMode
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.const import EntityCategory
@@ -31,6 +30,7 @@ from .entity import (
     async_setup_capability_entities,
 )
 from .rooms import find_room
+from .seed import CLEAN_AREA_MODE
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -125,9 +125,13 @@ def _room_descriptions(rooms: Any) -> list[DeebotButtonEntityDescription]:
     that moved would take the owner's automations with it. The id is the
     robot's own handle and is what the clean command is given.
 
-    The command comes off the CAPABILITY rather than an imported class: which
-    form this robot answers to is decided in one place (`seed.py`), and these
-    buttons sent a refused one until that was true.
+    THE WHOLE WIRE FORM COMES FROM `seed.py`, not from an import here. Both
+    halves of it -- which command class carries a per-area clean, and which
+    `content.type` names one -- are properties of this robot's firmware, and
+    both were wrong here at different times: these buttons sent the refused
+    `clean` until #28, and then the refused `spotArea` until #27 closed. A
+    literal at the call site is a guess nobody measured; `CLEAN_AREA_MODE`
+    carries the measurement that replaced it.
     """
     return [
         DeebotButtonEntityDescription(
@@ -138,7 +142,7 @@ def _room_descriptions(rooms: Any) -> list[DeebotButtonEntityDescription]:
             room_id=room.id,
             command_fn=(
                 lambda room_id: lambda c: c.clean.action.area(
-                    CleanMode.SPOT_AREA, [room_id], 1
+                    CLEAN_AREA_MODE, [room_id], 1
                 )
             )(room.id),
         )
@@ -223,7 +227,7 @@ class DeebotRoomButton(DeebotButton):
 
         The base rule cannot answer this: it gates on the `rooms` CAPABILITY,
         which stays usable while the robot still has a map -- so a button for
-        a deleted room stayed pressable and sent `CleanArea` for an area the
+        a deleted room stayed pressable and sent a clean order for an area the
         robot no longer knows, which comes back as a bare "command failed"
         naming nothing. Refusing at the entity is the same refusal
         `deebot_discovery.clean_rooms` already makes by name.
