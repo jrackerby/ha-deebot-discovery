@@ -101,6 +101,12 @@ CONF_DID: Final = "did"
 #: them for a new code for ever.
 CONF_DEVICE_ID: Final = "device_id"
 
+#: The `uid` + `accessToken` the cloud returned at login or verification, as
+#: `auth.py` renews the portal login from them: Ecovacs answers 1013 to every
+#: password login from an affected account, verified device or not (GH-35),
+#: so this pair, not the password, is what keeps the entry signed in.
+CONF_ACCOUNT: Final = "account_credentials"
+
 # -- storage -----------------------------------------------------------------
 
 #: The capability map is this integration's own ledger and nothing else keeps

@@ -202,6 +202,15 @@ for that library rather than a pin — a pin would fight core's own.
 | Country | Must match the country the Ecovacs app uses — it selects which regional servers the robot is reachable on. |
 | Verification code | Asked only when Ecovacs demands it. One-time, emailed, and per Home Assistant installation rather than per sign-in. |
 
+Signing in returns a pair of account credentials (`uid` and `accessToken`)
+that the entry keeps beside the password, because that pair is what actually
+keeps the robot signed in: Ecovacs now answers "Please update to the latest
+version to continue" (code 1013) to every *password* sign-in from an
+affected account, verified installation or not, while the pair still mints a
+session with no password and no code. The password is the fallback for a
+pair the cloud stops honouring; on an affected account that fallback is
+answered 1013 and the re-authentication asks for one new emailed code.
+
 If the account has more than one robot, the flow asks which. One entry per
 robot, so removing one leaves the others untouched.
 
@@ -279,6 +288,15 @@ is unreachable, the cloud says the robot is offline, or the capability behind
 it was demoted. The connectivity binary sensor stays available in all three —
 it is the one entity that must not disappear with its subject — so read it
 first.
+
+**"Please update to the latest version to continue" after signing in.**
+Ecovacs code 1013 on the password sign-in, which on an affected account
+answers every password sign-in whatever was verified. Signing in again with
+the emailed code mints the account credentials the entry then signs in with
+instead (see *What it asks for*); an entry set up before those were kept
+needs one such re-authentication. A loop that asks for a code on every start
+means the pair is not being stored — turn `deebot_client` and
+`custom_components.deebot_discovery` to debug and read which endpoint answers.
 
 **A command did nothing and raised.** The message names the command. Ecovacs
 answers a command it cannot carry out the same way it answers one the robot
