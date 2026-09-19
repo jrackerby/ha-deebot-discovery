@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from deebot_client.api_client import ApiClient
-from deebot_client.authentication import Authenticator, create_rest_config
+from deebot_client.authentication import create_rest_config
 from deebot_client.exceptions import (
     DeviceVerificationRequiredError,
     InvalidAuthenticationError,
@@ -42,7 +42,9 @@ from homeassistant.helpers.selector import (
 )
 from homeassistant.util.uuid import random_uuid_hex
 
+from .auth import AccountAuthenticator, AccountCredentials
 from .const import (
+    CONF_ACCOUNT,
     CONF_COUNTRY,
     CONF_DEVICE_ID,
     CONF_DID,
@@ -81,6 +83,7 @@ class DeebotConfigFlow(ConfigFlow, domain=DOMAIN):
         self._input: dict[str, Any] = {}
         self._device_id: str = ""
         self._robots: list[ApiDeviceInfo] = []
+        self._account: AccountCredentials | None = None
 
     # -- the account --------------------------------------------------------
 
@@ -172,6 +175,7 @@ class DeebotConfigFlow(ConfigFlow, domain=DOMAIN):
                     **self._input,
                     CONF_DEVICE_ID: self._device_id,
                     CONF_DID: did,
+                    CONF_ACCOUNT: self._account,
                 },
             )
 
@@ -245,13 +249,17 @@ class DeebotConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     def _async_finish_reauth(self) -> ConfigFlowResult:
+        # The account credentials this flow's login or verification just
+        # returned travel with the password: they are what the coordinator
+        # logs in with (auth.py); the password is its fallback.
         return self.async_update_reload_and_abort(
-            self._get_reauth_entry(), data_updates=self._input
+            self._get_reauth_entry(),
+            data_updates={**self._input, CONF_ACCOUNT: self._account},
         )
 
     # -- the channel both flows prove --------------------------------------
 
-    def _authenticator(self) -> Authenticator:
+    def _authenticator(self) -> AccountAuthenticator:
         session = async_get_clientsession(self.hass)
         config = create_rest_config(
             session,
@@ -266,7 +274,7 @@ class DeebotConfigFlow(ConfigFlow, domain=DOMAIN):
         # else: it is not protection, and it is not a reason to store the
         # digest instead of the password, which reauth and the Ecovacs app
         # both still need.
-        return Authenticator(
+        return AccountAuthenticator(
             config, self._input[CONF_USERNAME], md5(self._input[CONF_PASSWORD])
         )
 
@@ -294,6 +302,9 @@ class DeebotConfigFlow(ConfigFlow, domain=DOMAIN):
                 await authenticator.verify_device(verification_code)
             devices = await ApiClient(authenticator).get_devices()
         finally:
+            # Kept whichever way the call went: a pair that came back with a
+            # robot list is a pair the coordinator can log in with.
+            self._account = authenticator.account or self._account
             await authenticator.teardown()
 
         return [*devices.not_supported, *(d.api for d in devices.mqtt)]

@@ -386,8 +386,10 @@ def check_the_password_is_hashed_before_it_is_sent(tree):
         for node in ast.walk(module):
             if not isinstance(node, ast.Call):
                 continue
-            if (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) != (
-                "Authenticator"
+            # AccountAuthenticator (auth.py) takes the same three positionals.
+            if (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) not in (
+                "Authenticator",
+                "AccountAuthenticator",
             ):
                 continue
             # Positional third, or the keyword the library names it by.

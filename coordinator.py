@@ -27,7 +27,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from deebot_client.api_client import ApiClient
-from deebot_client.authentication import Authenticator, create_rest_config
+from deebot_client.authentication import create_rest_config
 from deebot_client.commands.json.map import (
     GetCachedMapInfo,
     GetMapSetV2,
@@ -53,8 +53,10 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .auth import AccountAuthenticator, AccountCredentials
 from .classify import classify
 from .const import (
+    CONF_ACCOUNT,
     CONF_COUNTRY,
     CONF_DEVICE_ID,
     CONF_DID,
@@ -147,7 +149,7 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
             hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}.{entry.entry_id}"
         )
         self._states: dict[str, CapabilityState] = {}
-        self._authenticator: Authenticator | None = None
+        self._authenticator: AccountAuthenticator | None = None
         self._mqtt: MqttClient | None = None
         self._device: Device | None = None
         self._available = False
@@ -225,9 +227,15 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
             session, device_id=device_id, alpha_2_country=country
         )
         # `password_hash`, not the password -- see config_flow.py for what
-        # sending the wrong one looks like from the outside.
-        authenticator = Authenticator(
-            rest_config, data[CONF_USERNAME], md5(data[CONF_PASSWORD])
+        # sending the wrong one looks like from the outside. The account
+        # credentials the flow stored are what actually logs in (auth.py):
+        # the password endpoint answers 1013 to this account whatever the
+        # device id, and a pair the cloud hands back later is persisted so a
+        # restart never needs the password either.
+        authenticator = AccountAuthenticator(
+            rest_config, data[CONF_USERNAME], md5(data[CONF_PASSWORD]),
+            account=data.get(CONF_ACCOUNT),
+            on_account=self._async_store_account,
         )
         api_client = ApiClient(authenticator)
 
@@ -316,6 +324,13 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
         self._mqtt = mqtt
         self._device = device
         self._states = _restore(await self._store.async_load())
+
+    async def _async_store_account(self, account: AccountCredentials) -> None:
+        """Persist a new account-credential pair in the entry."""
+        entry = self.config_entry
+        self.hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_ACCOUNT: account}
+        )
 
     async def async_shutdown(self) -> None:
         """Tear the cloud session down.
