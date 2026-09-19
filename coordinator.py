@@ -37,8 +37,8 @@ from deebot_client.device import Device
 from deebot_client.events import AvailabilityEvent, LifeSpan, LifeSpanEvent, RoomsEvent
 from deebot_client.events.map import CachedMapInfoEvent, MapSetType
 from deebot_client.exceptions import (
+    AuthenticationError,
     DeebotError,
-    InvalidAuthenticationError,
 )
 from deebot_client.message import HandlingState
 from deebot_client.models import DeviceInfo
@@ -233,7 +233,13 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
 
         try:
             devices = await api_client.get_devices()
-        except InvalidAuthenticationError as err:
+        except AuthenticationError as err:
+            # AuthenticationError, not InvalidAuthenticationError: a device
+            # verification demand (Ecovacs code 1013, "Please update to the
+            # latest version to continue") is an AuthenticationError that is
+            # NOT an InvalidAuthenticationError, and as a NotReady it was
+            # retried for ever while the re-auth flow -- whose verification
+            # step is the fix -- never opened (GH-33).
             raise ConfigEntryAuthFailed(str(err)) from err
         except DeebotError as err:
             raise ConfigEntryNotReady(f"Could not reach the Ecovacs cloud: {err}") from err
@@ -483,7 +489,7 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
         """Run one probe pass and publish the resulting usable key set."""
         try:
             result = await self._probe_pass()
-        except InvalidAuthenticationError as err:
+        except AuthenticationError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except DeebotError as err:
             raise UpdateFailed(f"Could not reach the Ecovacs cloud: {err}") from err
@@ -523,7 +529,7 @@ class DeebotCoordinator(DataUpdateCoordinator[frozenset[str]]):
             # a void pass leaves the previous map standing.
             try:
                 await self._refresh_rooms()
-            except InvalidAuthenticationError:
+            except AuthenticationError:
                 raise
             except Exception:  # noqa: BLE001
                 self._log_condition(
@@ -591,7 +597,7 @@ It is also deliberately NOT `device.execute_command`: that path holds
                 self.device.device_info,
                 self.device.events,
             )
-        except InvalidAuthenticationError:
+        except AuthenticationError:
             raise
         except Exception:  # noqa: BLE001
             # Not a miss. A probe that never completed is a statement about
